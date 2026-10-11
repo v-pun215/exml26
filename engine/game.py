@@ -70,7 +70,7 @@ class Game:
         # Broadcast to all alive teammates regardless of range/obstacles.
         self._death_log = []
 
-    def _collect_team_actions(self, team_name, team_spheres, all_alive, own_flag_state):
+    def _collect_team_actions(self, team_name, team_spheres, all_alive, own_flag_state, other_flags_state):
         worker = self.clients[team_name]
         actions = {}
         for sphere in team_spheres:
@@ -82,6 +82,9 @@ class Game:
                 "self": sphere.to_state_dict(),
                 "visible_enemies": enemies,
                 "own_flag": own_flag_state,
+                "other_flags": other_flags_state,
+                "teammates": [s.to_state_dict() for s in team_spheres if s.id != sphere.id],
+                "score": dict(self.score),
                 "sonar_receive": sonars,
                 # legacy typo, kept so existing models don't KeyError
                 "sonar_recieve": sonars,
@@ -106,6 +109,7 @@ class Game:
                 team_spheres,
                 alive_spheres,
                 flag_by_team[team_name].to_state_dict(),
+                [f.to_state_dict() for f in self.flags if f.team != team_name],
             )
             for team_name, team_spheres in by_team.items()
         }
@@ -136,7 +140,7 @@ class Game:
             if sid not in alive_ids:
                 del self._last_sonar[sid]
 
-        self.telemetry.record_tick(self.tick, self.spheres, self.flags, self.score, self._respawn_at)
+        self.telemetry.record_tick(self.tick, self.spheres, self.flags, self.score, self._respawn_at, self._death_log)
         self.tick += 1
 
     def _collect_deaths(self):

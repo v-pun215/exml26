@@ -1,74 +1,167 @@
-"""Sonar + death-message demo (kept simple).
+"""Hammer doctrine (red): fixed roles, flag-first CTF.
 
-Roles (engine `player` number, constant all game):
-  player 1:    drives down (+y) at full speed from the first tick.
-  players 2,3: hold at spawn until a teammate death message arrives,
-               then drive down too.
+  player 1 attacker: run the enemy home, touch the flag, run it back.
+  player 2 defender: hold home; if our flag is stolen, chase the thief and
+    kill them (touch can't recover a flag — only killing the carrier
+    drops it, and kills need higher speed, so chase downhill of them).
+  player 3 rover: second attacker on an offset lane; escorts player 1 home
+    when it hears a has-flag sonar ping.
 
-Two separate channels:
-  sonar: sent only when the model wants (range + line-of-sight apply).
-    Movers ping {"kind": "moving", "player": p, "tick": t}. Followers note
-    the first sonar heard (receive-path check) but do NOT act on it.
-  death_messages: engine-broadcast on death to all alive teammates,
-    ignoring range and obstacles:
-      {"player", "team", "tick", "x", "y", "reason": "wall"|"player"}.
-    This is the ONLY trigger for followers. Each model also keeps an
-    internal obstacle map (death positions) separate from sonar state.
+Sonar: carriers ping {"kind": "has-flag", "player", "tick"}.
+Death spots are steered around (internal obstacle map, separate channel).
 
 NOTE: one ModelWorker process serves a whole team, so module globals are
-shared across that team's spheres (but not across teams). decide() must
-stay fast (<30ms RPC budget) and print only on transitions.
+shared across that team's spheres. decide() must stay fast (<30ms).
 """
 
 import math
 
-_go = False
-_seen_deaths = set()
-_heard_sonar = False
-_obstacle_map = []  # internal map of death spots: [(x, y, reason)]
+_home = None
+_flag_tick = -10 ** 9
+_last_score = None
+_carry = {}
+_prev_speed = {}
+_prev_tick = {}
+_detour_until = {}
+_detour_side = {}
+_detour_n = {}
 
 
-def _steer_to_down(yaw):
-    # Forward is (sin(yaw), cos(yaw)); yaw=0 drives +y ("down" on screen).
-    err = -yaw
-    while err > math.pi:
-        err -= 2 * math.pi
-    while err < -math.pi:
-        err += 2 * math.pi
-    return max(-1.0, min(1.0, err * 0.2))
+def _norm(a):
+    while a > math.pi:
+        a -= 2 * math.pi
+    while a < -math.pi:
+        a += 2 * math.pi
+    return a
+
+
+def _nav(s, tx, ty, arrive=2.5, cruise=13.0):
+    dx, dy = tx - s["x"], ty - s["y"]
+    dist = math.hypot(dx, dy)
+    rel = _norm(math.atan2(dx, dy) - s.get("yaw", 0.0))
+    turn = max(-1.0, min(1.0, rel * 0.6))
+    if dist < arrive:
+        return 0.0, turn, dist
+    want = cruise if dist > 10.0 else cruise * max(0.25, dist / 10.0)
+    throttle = 1.0 if s.get("speed", 0.0) < want else 0.0
+    if abs(rel) > 1.2:
+        throttle = min(throttle, 0.2)
+    return throttle, turn, dist
+
+
+def _avoid(x, y, deaths):
+    ax, ay = 0.0, 0.0
+    for m in (deaths or [])[-6:]:
+        dx, dy = x - m.get("x", x), y - m.get("y", y)
+        d = math.hypot(dx, dy)
+        if 0.01 < d < 9.0:
+            w = (9.0 - d) / 9.0
+            ax += dx / d * w
+            ay += dy / d * w
+    return ax, ay
+
+
+def _combat(s, enemies, carrying):
+    me = s.get("speed", 0.0)
+    best, bd = None, 9.0
+    for e in enemies or []:
+        d = math.hypot(e.get("x", 0) - s["x"], e.get("y", 0) - s["y"])
+        if d < bd:
+            bd, best = d, e
+    if best is None:
+        return None
+    es = best.get("speed", 0.0)
+    rel = _norm(math.atan2(best.get("x", 0) - s["x"], best.get("y", 0) - s["y"]) - s.get("yaw", 0.0))
+    if me > es + 1.5 and (not carrying or bd < 4.0):
+        return (1.0 if abs(rel) < 1.0 else 0.3), max(-1.0, min(1.0, rel * 0.6))
+    if carrying and es > me + 2.0 and bd < 7.0:
+        away = _norm(rel + math.pi)
+        return 1.0, max(-1.0, min(1.0, away * 0.6))
+    return None
+
+
+def _move(sid, tick, s, tx, ty, arrive=2.5, cruise=13.0):
+    speed = s.get("speed", 0.0)
+    prev = _prev_speed.get(sid, speed)
+    if _prev_tick.get(sid, tick - 1) != tick - 1:
+        prev = speed
+    stalled = prev > 4.0 and speed < 1.5
+    _prev_speed[sid] = speed
+    _prev_tick[sid] = tick
+    if stalled and tick >= _detour_until.get(sid, -1):
+        n = _detour_n.get(sid, 0) + 1
+        _detour_n[sid] = n
+        _detour_side[sid] = 1.0 if n % 2 else -1.0
+        _detour_until[sid] = tick + 16
+    if tick < _detour_until.get(sid, -1):
+        return 1.0, _detour_side[sid], True
+    throttle, turn, _dist = _nav(s, tx, ty, arrive, cruise)
+    return throttle, turn, False
+
+
+def _ping(player, tick):
+    return {"kind": "has-flag", "player": player, "tick": tick}
 
 
 def decide(observation):
-    global _go, _heard_sonar
-    self_state = observation["self"]
-    sid = self_state["id"]
-    team = self_state.get("team", "?")
-    player = self_state.get("player", (sid % 3) + 1)
-    yaw = self_state.get("yaw", 0.0)
+    global _home, _flag_tick, _last_score
+    s = observation["self"]
+    sid = s["id"]
+    team = s.get("team", "?")
+    player = s.get("player", (sid % 3) + 1)
     tick = observation.get("tick", 0)
+    own = observation.get("own_flag", {}) or {}
+    if own.get("at_home"):
+        _home = (own.get("x", s["x"]), own.get("y", s["y"]))
+    hx, hy = _home if _home else (s["x"], s["y"])
+    ex, ey = -hx, -hy  # enemy home mirrors ours across the arena
 
-    # Death channel: new teammate deaths -> update internal map, trigger.
-    for m in observation.get("death_messages", []) or []:
-        key = (m.get("tick"), m.get("player"))
-        if key not in _seen_deaths:
-            _seen_deaths.add(key)
-            _obstacle_map.append((m.get("x"), m.get("y"), m.get("reason")))
-            print(f"[{team} tick={tick}] player {player} learned: "
-                  f"player {m.get('player')} died ({m.get('reason')}) "
-                  f"at ({m.get('x', 0):.1f}, {m.get('y', 0):.1f})", flush=True)
-    if _seen_deaths and not _go:
-        _go = True
-        print(f"[{team} tick={tick}] player {player} (id {sid}) moving out!", flush=True)
+    score = observation.get("score", {}) or {}
+    if _last_score is not None and score.get(team, 0) > _last_score:
+        print(f"[{team} tick={tick}] SCORED! {score}", flush=True)
+    _last_score = score.get(team, 0)
 
-    # Sonar channel: receive-path check only, never triggers movement.
     inbox = observation.get("sonar_receive", observation.get("sonar_recieve", [])) or []
-    if inbox and not _heard_sonar:
-        _heard_sonar = True
-        first = inbox[0]
-        print(f"[{team} tick={tick}] sonar OK, heard {first.get('value')} "
-              f"from player {first.get('from_player')}", flush=True)
+    for m in inbox:
+        v = m.get("value") if isinstance(m, dict) else None
+        if isinstance(v, dict) and v.get("kind") == "has-flag":
+            _flag_tick = tick
 
-    turn = _steer_to_down(yaw)
-    if player == 1 or _go:
-        return 1.0, turn, False, {"kind": "moving", "player": player, "tick": tick}
-    return 0.0, turn, False, None
+    carrying = s.get("carrying")
+    if carrying and not _carry.get(sid):
+        print(f"[{team} tick={tick}] player {player} grabbed the {carrying} flag!", flush=True)
+    _carry[sid] = bool(carrying)
+
+    mates = {m.get("player"): m for m in observation.get("teammates", []) or []}
+    deaths = observation.get("death_messages", []) or []
+    ax, ay = _avoid(s["x"], s["y"], deaths)
+
+    ping = None
+    if player == 1:  # attacker
+        if carrying:
+            tx, ty = hx, hy
+            ping = _ping(player, tick)
+        else:
+            tx, ty = ex, ey
+    elif player == 2:  # defender
+        if not own.get("at_home", True):
+            tx, ty = own.get("x", hx), own.get("y", hy)  # chase the thief
+        else:
+            tx, ty = hx, hy
+    else:  # rover: escort on has-flag, else offset lane
+        if carrying:
+            tx, ty = hx, hy
+            ping = _ping(player, tick)
+        elif tick - _flag_tick < 30 and 1 in mates:
+            tx, ty = mates[1].get("x", ex), mates[1].get("y", ey)
+        else:
+            dx, dy = ex - hx, ey - hy
+            L = math.hypot(dx, dy) or 1.0
+            tx, ty = ex + (-dy / L) * 20.0, ey + (dx / L) * 20.0
+
+    arrive = 8.0 if (player == 2 and own.get("at_home", True) and not carrying) else 2.5
+    throttle, turn, jump = _move(sid, tick, s, tx + ax * 7.0, ty + ay * 7.0, arrive)
+    ov = _combat(s, observation.get("visible_enemies"), carrying)
+    if ov is not None and not jump:
+        throttle, turn = ov
+    return throttle, turn, jump, ping

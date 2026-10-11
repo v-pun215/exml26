@@ -135,4 +135,5 @@ class Sphere:
             "yaw": self.yaw,
             "grounded": self.grounded,
             "alive": self.alive,
+            "carrying": self.carrying_flag.team if self.carrying_flag is not None else None,
         }

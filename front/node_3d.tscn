@@ -1,0 +1,31 @@
+[gd_scene format=3 uid="uid://cc78lpjjyu4fa"]
+
+[ext_resource type="PackedScene" uid="uid://dd65fr20llx8n" path="res://real_sphere.fbx" id="1_a202f"]
+[ext_resource type="PackedScene" uid="uid://dtjf3j6d68tl6" path="res://wall.fbx" id="2_noarx"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ua1sf"]
+
+[sub_resource type="Sky" id="Sky_454cp"]
+sky_material = SubResource("ProceduralSkyMaterial_ua1sf")
+
+[sub_resource type="Environment" id="Environment_njevn"]
+background_mode = 2
+sky = SubResource("Sky_454cp")
+
+[node name="Node3D" type="Node3D" unique_id=931327287]
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=1019644849]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=897535917]
+environment = SubResource("Environment_njevn")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1692968489]
+transform = Transform3D(1, 0, 0, 0, 0.017895892, 0.99983984, 0, -0.99983984, 0.017895892, 0, 0, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=150624132]
+
+[node name="real_sphere" parent="." unique_id=1559798163 instance=ExtResource("1_a202f")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.5684626, 0.17173731, -2.27723)
+
+[node name="wall" parent="." unique_id=1043365309 instance=ExtResource("2_noarx")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.8479273, 1.3074973, -0.76522005)

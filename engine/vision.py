@@ -1,6 +1,6 @@
 import math
 
-from engine.constants import VISION_HALF_ANGLE_DEG, VISION_RANGE
+from engine.constants import VISION_HALF_ANGLE_DEG, VISION_RANGE, SONAR_RANGE
 from engine.geometry import segment_intersects_polygon
 
 VISION_HALF_ANGLE = math.radians(VISION_HALF_ANGLE_DEG)
@@ -33,14 +33,69 @@ def visible_enemies(sphere, others, obstacles):
         dist = math.hypot(dx, dy)
         if dist == 0 or dist > VISION_RANGE:
             continue
-
+        # this is FOV check
         angle_to = math.atan2(dx, dy)
         relative = _normalize_angle(angle_to - sphere.yaw)
         if abs(relative) > VISION_HALF_ANGLE:
             continue
-
+        # this is obstacle check
         if _blocked(sphere, other, obstacles):
             continue
 
         visible.append(other.to_state_dict())
     return visible
+
+
+def sonar_recipients(sender, all_spheres, obstacles):
+    """Return spheres that would hear a ping emitted by `sender` now.
+
+    Teammates only, within SONAR_RANGE, not blocked, excluding self.
+    Kept for backwards-compat / debugging; the game loop uses
+    `audible_sonars` below to actually deliver values.
+    """
+    recipients = []
+    for sphere in all_spheres:
+        if not sphere.alive or sphere.id == sender.id:
+            continue
+        if sphere.team != sender.team:
+            continue
+        dx, dy = sphere.x - sender.x, sphere.y - sender.y
+        dist = math.hypot(dx, dy)
+        if dist > SONAR_RANGE:
+            continue
+        if _blocked(sender, sphere, obstacles):
+            continue
+        recipients.append(sphere.to_state_dict())
+    return recipients
+
+
+def audible_sonars(receiver, all_spheres, last_sonar, obstacles):
+    """Return sonar values `receiver` can hear this tick.
+
+    `last_sonar` maps sender_id -> value emitted last tick (None = silent).
+    Only teammates within SONAR_RANGE with clear LOS are audible.
+    Returns list of {"from_id": int, "from_player": int, "value": Any}.
+    `value` is the sender's payload verbatim — convention is a struct dict
+    like {"kind": "heartbeat"|"danger", "player": int, "tick": int}.
+    """
+    if not receiver.alive:
+        return []
+    heard = []
+    by_id = {s.id: s for s in all_spheres}
+    for sender_id, value in (last_sonar or {}).items():
+        if value is None:
+            continue
+        if sender_id == receiver.id:
+            continue
+        sender = by_id.get(sender_id)
+        if sender is None or not sender.alive:
+            continue
+        if sender.team != receiver.team:
+            continue
+        dist = math.hypot(sender.x - receiver.x, sender.y - receiver.y)
+        if dist > SONAR_RANGE:
+            continue
+        if _blocked(sender, receiver, obstacles):
+            continue
+        heard.append({"from_id": sender_id, "from_player": sender.player, "value": value})
+    return heard

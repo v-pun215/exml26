@@ -37,7 +37,7 @@ def resolve_obstacle_collisions(spheres, obstacles):
                 continue
 
             if sphere.speed >= OBSTACLE_LETHAL_SPEED:
-                sphere.kill()
+                sphere.kill("wall")
                 break
 
             if inside:
@@ -76,12 +76,12 @@ def resolve_sphere_collisions(spheres):
                 continue
 
             if a.speed < b.speed:
-                a.kill()
+                a.kill("player")
             elif b.speed < a.speed:
-                b.kill()
+                b.kill("player")
             else:
-                a.kill()
-                b.kill()
+                a.kill("player")
+                b.kill("player")
 
 
 def _bounce(a, b, dist):

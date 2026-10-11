@@ -9,8 +9,24 @@ from engine.map_gen import generate_map
 from engine.physics import clamp_to_arena, resolve_obstacle_collisions, resolve_sphere_collisions
 from engine.sphere import Sphere
 from engine.telemetry import TelemetryRecorder
-from engine.vision import visible_enemies
+from engine.vision import audible_sonars, visible_enemies
 from rpc.worker import ModelWorker
+
+
+def _normalize_action(action):
+    """Accept 3-tuple (throttle, turn, jump) or 4-tuple (+ sonar_val)."""
+    try:
+        if not isinstance(action, (tuple, list)):
+            return 0.0, 0.0, False, None
+        if len(action) == 3:
+            throttle, turn, jump = action
+            return throttle, turn, jump, None
+        if len(action) >= 4:
+            throttle, turn, jump, sonar_val = action[:4]
+            return throttle, turn, jump, sonar_val
+        return 0.0, 0.0, False, None
+    except Exception:
+        return 0.0, 0.0, False, None
 
 
 def _team_home(index, total):
@@ -36,7 +52,7 @@ class Game:
             self.clients[team["name"]] = ModelWorker(team["name"], team["model_path"])
             for i in range(spheres_per_team):
                 offset = (i - spheres_per_team / 2.0) * 3.0
-                self.spheres.append(Sphere(sphere_id, team["name"], hx + offset, hy))
+                self.spheres.append(Sphere(sphere_id, team["name"], hx + offset, hy, player=i + 1))
                 sphere_id += 1
 
         self.flags = [Flag(team["name"], hx, hy) for team, (hx, hy) in zip(teams, homes)]
@@ -45,17 +61,32 @@ class Game:
         self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks)
         self._pool = ThreadPoolExecutor(max_workers=max(4, len(teams)))
         self._respawn_at = {}
+        # sphere_id -> sonar value emitted last tick (None = silent).
+        # Delivered with a 1-tick delay via audible_sonars().
+        self._last_sonar = {}
+        # Team death reports, newest last. Each is a struct:
+        # {"player": int, "team": str, "tick": int,
+        #  "x": float, "y": float, "reason": "wall"|"player"}.
+        # Broadcast to all alive teammates regardless of range/obstacles.
+        self._death_log = []
 
     def _collect_team_actions(self, team_name, team_spheres, all_alive, own_flag_state):
         worker = self.clients[team_name]
         actions = {}
         for sphere in team_spheres:
             enemies = visible_enemies(sphere, all_alive, self.obstacles)
+            sonars = audible_sonars(sphere, all_alive, self._last_sonar, self.obstacles)
+            deaths = [m for m in self._death_log if m["team"] == sphere.team]
             observation = {
                 "tick": self.tick,
                 "self": sphere.to_state_dict(),
                 "visible_enemies": enemies,
                 "own_flag": own_flag_state,
+                "sonar_receive": sonars,
+                # legacy typo, kept so existing models don't KeyError
+                "sonar_recieve": sonars,
+                # teammate death reports (team-only, no range/LOS filter)
+                "death_messages": deaths,
             }
             actions[sphere.id] = worker.get_action(observation, RPC_TIMEOUT_S)
         return actions
@@ -81,8 +112,13 @@ class Game:
         for team_name, future in futures.items():
             actions = future.result()
             for sphere in by_team[team_name]:
-                throttle, turn, jump = actions[sphere.id]
-                sphere.apply_action(throttle, turn, jump)
+                throttle, turn, jump, sonar_val = _normalize_action(actions.get(sphere.id))
+                sphere.apply_action(throttle, turn, jump, sonar_val)
+                # Store emission for delivery next tick. None = silent.
+                if sonar_val is not None:
+                    self._last_sonar[sphere.id] = sonar_val
+                elif sphere.id in self._last_sonar:
+                    del self._last_sonar[sphere.id]
 
         for sphere in self.spheres:
             sphere.integrate(TICK_DT)
@@ -91,10 +127,32 @@ class Game:
         resolve_obstacle_collisions(self.spheres, self.obstacles)
         resolve_sphere_collisions(self.spheres)
         update_flags(self.flags, self.spheres, self.score)
+        self._collect_deaths()
         self._process_respawns()
+        # Drop stale emissions from dead spheres so a respawn doesn't
+        # rebroadcast a value from before death.
+        alive_ids = {s.id for s in self.spheres if s.alive}
+        for sid in list(self._last_sonar):
+            if sid not in alive_ids:
+                del self._last_sonar[sid]
 
         self.telemetry.record_tick(self.tick, self.spheres, self.flags, self.score, self._respawn_at)
         self.tick += 1
+
+    def _collect_deaths(self):
+        for sphere in self.spheres:
+            if sphere.alive or sphere.death_reported:
+                continue
+            sphere.death_reported = True
+            self._death_log.append({
+                "player": sphere.player,
+                "team": sphere.team,
+                "tick": self.tick,
+                "x": sphere.death_x,
+                "y": sphere.death_y,
+                "reason": sphere.death_reason or "unknown",
+            })
+        del self._death_log[:-200]  # bound growth; deaths are rare
 
     def _process_respawns(self):
         for sphere in self.spheres:

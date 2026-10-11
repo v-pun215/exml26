@@ -13,9 +13,11 @@ from engine.constants import (
 
 
 class Sphere:
-    def __init__(self, sphere_id, team, x, y, z=SPHERE_RADIUS):
+    def __init__(self, sphere_id, team, x, y, z=SPHERE_RADIUS, player=None):
         self.id = sphere_id
         self.team = team
+        # 1-based index within the team, constant for the whole game.
+        self.player = player if player is not None else sphere_id + 1
         self.start_x = x
         self.start_y = y
         self.start_z = z
@@ -32,12 +34,16 @@ class Sphere:
         self.grounded = True
         self.alive = True
         self.carrying_flag = None
+        self.death_reason = None
+        self.death_x = None
+        self.death_y = None
+        self.death_reported = False
 
     @property
     def speed(self):
         return math.hypot(self.vx, self.vy)
 
-    def apply_action(self, throttle, turn, jump):
+    def apply_action(self, throttle, turn, jump, sonar_val=None):
         if not self.alive:
             return
 
@@ -82,11 +88,19 @@ class Sphere:
             self.vz = 0.0
             self.grounded = True
 
-    def kill(self):
+    def kill(self, reason=None):
+        if not self.alive:
+            return
         self.alive = False
         self.vx = 0.0
         self.vy = 0.0
         self.vz = 0.0
+        # Death report, maintained separately from the sonar channel.
+        # Game.step() collects this into the team death log once.
+        self.death_reason = reason
+        self.death_x = self.x
+        self.death_y = self.y
+        self.death_reported = False
         if self.carrying_flag is not None:
             self.carrying_flag.drop()
             self.carrying_flag = None
@@ -101,11 +115,16 @@ class Sphere:
         self.vz = 0.0
         self.grounded = True
         self.alive = True
+        self.death_reason = None
+        self.death_x = None
+        self.death_y = None
+        self.death_reported = False
 
     def to_state_dict(self):
         return {
             "id": self.id,
             "team": self.team,
+            "player": self.player,
             "x": self.x,
             "y": self.y,
             "z": self.z,

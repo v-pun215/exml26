@@ -9,11 +9,26 @@ def _load_decide(model_path):
     return module.decide
 
 
+def _normalize(action):
+    try:
+        if not isinstance(action, (tuple, list)):
+            return (0.0, 0.0, False, None)
+        if len(action) == 3:
+            throttle, turn, jump = action
+            return (throttle, turn, jump, None)
+        if len(action) >= 4:
+            throttle, turn, jump, sonar = action[:4]
+            return (throttle, turn, jump, sonar)
+        return (0.0, 0.0, False, None)
+    except Exception:
+        return (0.0, 0.0, False, None)
+
+
 def _worker_loop(model_path, conn):
     try:
         decide = _load_decide(model_path)
     except Exception:
-        decide = lambda observation: (0.0, 0.0, False)
+        decide = lambda observation: (0.0, 0.0, False, None)
 
     while True:
         try:
@@ -23,9 +38,9 @@ def _worker_loop(model_path, conn):
         if observation is None:
             break
         try:
-            action = decide(observation)
+            action = _normalize(decide(observation))
         except Exception:
-            action = (0.0, 0.0, False)
+            action = (0.0, 0.0, False, None)
         conn.send(action)
 
 
@@ -53,17 +68,17 @@ class ModelWorker:
             self._conn.send(observation)
         except (BrokenPipeError, OSError):
             self._respawn()
-            return (0.0, 0.0, False)
+            return (0.0, 0.0, False, None)
 
         if self._conn.poll(timeout):
             try:
-                return self._conn.recv()
+                return _normalize(self._conn.recv())
             except EOFError:
                 self._respawn()
-                return (0.0, 0.0, False)
+                return (0.0, 0.0, False, None)
 
         self._respawn()
-        return (0.0, 0.0, False)
+        return (0.0, 0.0, False, None)
 
     def close(self):
         if self._process is not None and self._process.is_alive():

@@ -1,0 +1,4 @@
+[
+  {"name": "red", "model_path": "teams/example_team/model.py"},
+  {"name": "blue", "model_path": "teams/example_team/model.py"}
+]

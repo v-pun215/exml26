@@ -42,7 +42,7 @@ class Game:
         self.flags = [Flag(team["name"], hx, hy) for team, (hx, hy) in zip(teams, homes)]
         self.obstacles = generate_map(homes, seed=seed)
         self.telemetry = TelemetryRecorder()
-        self.telemetry.record_map(self.obstacles, self.flags)
+        self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks)
         self._pool = ThreadPoolExecutor(max_workers=max(4, len(teams)))
         self._respawn_at = {}
 
@@ -93,7 +93,7 @@ class Game:
         update_flags(self.flags, self.spheres, self.score)
         self._process_respawns()
 
-        self.telemetry.record_tick(self.tick, self.spheres, self.flags, self.score)
+        self.telemetry.record_tick(self.tick, self.spheres, self.flags, self.score, self._respawn_at)
         self.tick += 1
 
     def _process_respawns(self):

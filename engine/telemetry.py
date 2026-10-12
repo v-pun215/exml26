@@ -2,7 +2,11 @@ import json
 import time
 from pathlib import Path
 
-from engine.constants import ARENA_SIZE, SPHERE_RADIUS, TICK_RATE
+from engine.constants import ARENA_SIZE, GRAVITY, JUMP_SPEED, SPHERE_RADIUS, TICK_RATE
+
+#: Apex of a jump above rest height; sent in the map frame so viewers can
+#: normalize height-based effects without hardcoding physics.
+MAX_JUMP_HEIGHT = (JUMP_SPEED ** 2) / (2 * -GRAVITY)
 
 
 def build_map_frame(match_id, obstacles, flags, teams, max_ticks):
@@ -12,6 +16,7 @@ def build_map_frame(match_id, obstacles, flags, teams, max_ticks):
         "arena_size": ARENA_SIZE,
         "tick_rate": TICK_RATE,
         "sphere_radius": SPHERE_RADIUS,
+        "max_jump_height": MAX_JUMP_HEIGHT,
         "max_ticks": max_ticks,
         "teams": [{"name": t["name"], "color": t.get("color", "#ffffff")} for t in teams],
         "obstacles": [

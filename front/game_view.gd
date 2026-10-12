@@ -17,6 +17,7 @@ var retry_in := 0.0
 
 var arena := 200.0
 var sphere_r := 1.0
+var jump_h := 2.0
 var have_map := false
 
 const CAM_PITCH := 0.96
@@ -45,6 +46,8 @@ var camera: Camera3D
 var hud: Label
 
 var team_mats := {}
+var team_colors := {}
+var agent_mats := {}
 var sphere_nodes := {}
 var flag_nodes := {}
 var obstacle_mat: StandardMaterial3D
@@ -279,12 +282,17 @@ func _build_map(frame: Dictionary) -> void:
 
 	arena = float(frame.get("arena_size", 200.0))
 	sphere_r = float(frame.get("sphere_radius", 1.0))
+	jump_h = float(frame.get("max_jump_height", 2.0))
 	_setup_camera()
 
 	team_mats.clear()
+	team_colors.clear()
+	agent_mats.clear()
 	for t in frame.get("teams", []):
+		var base := Color(String(t.get("color", "#ffffff")))
+		team_colors[String(t.get("name", "?"))] = base
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(String(t.get("color", "#ffffff")))
+		mat.albedo_color = base
 		mat.emission_enabled = false
 		mat.roughness = 0.55
 		team_mats[String(t.get("name", "?"))] = mat
@@ -373,7 +381,7 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 	return mi
 
 
-func _make_agent(team: String, _player: int) -> Node3D:
+func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
 	var sm := SphereMesh.new()
@@ -382,7 +390,12 @@ func _make_agent(team: String, _player: int) -> Node3D:
 	sm.radial_segments = 24
 	sm.rings = 16
 	mi.mesh = sm
-	mi.material_override = team_mats.get(team, obstacle_mat)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = team_colors.get(team, Color(1, 1, 1))
+	mat.emission_enabled = false
+	mat.roughness = 0.55
+	mi.material_override = mat
+	agent_mats[sid] = mat
 	root.add_child(mi)
 	return root
 
@@ -409,11 +422,15 @@ func _apply_tick(frame: Dictionary) -> void:
 		var player := int(s.get("player", 0))
 		var node := sphere_nodes.get(sid, null) as Node3D
 		if node == null:
-			node = _make_agent(team, player)
+			node = _make_agent(sid, team, player)
 			agent_root.add_child(node)
 			sphere_nodes[sid] = node
-		node.position = Vector3(float(s.get("x", 0.0)), float(s.get("z", 0.0)), float(s.get("y", 0.0)))
+		var sy := float(s.get("z", 0.0))
+		node.position = Vector3(float(s.get("x", 0.0)), sy, float(s.get("y", 0.0)))
 		node.visible = bool(s.get("alive", true))
+		var hfrac := clampf((sy - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
+		var base: Color = team_colors.get(team, Color(1, 1, 1))
+		(agent_mats[sid] as StandardMaterial3D).albedo_color = base.lerp(Color(1, 1, 1), hfrac * 0.85)
 		last_info[sid] = {"team": team, "player": player}
 		last_pose[sid] = {"pos": node.position, "yaw": float(s.get("yaw", 0.0))}
 	_refresh_order()

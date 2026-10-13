@@ -1,6 +1,12 @@
 import math
 
-from engine.constants import ARENA_SIZE, OBSTACLE_LETHAL_SPEED, SPHERE_COLLISION_RADIUS, SPHERE_RADIUS
+from engine.constants import (
+    ARENA_SIZE,
+    OBSTACLE_LETHAL_SPEED,
+    RAMP_LETHAL_HEIGHT_FRACTION,
+    SPHERE_COLLISION_RADIUS,
+    SPHERE_RADIUS,
+)
 from engine.geometry import closest_point_on_polygon, distance_point_to_segment, point_in_polygon
 
 ARENA_LIMIT = ARENA_SIZE / 2.0 - SPHERE_RADIUS
@@ -53,6 +59,16 @@ def resolve_ramp_collisions(spheres, ramps):
         if any(r.height_at(sphere.x, sphere.y) is not None for r in ramps):
             continue
         for ramp in ramps:
+            lethal_height = ramp.height * RAMP_LETHAL_HEIGHT_FRACTION
+             # fixed a bug where the marble would die while falling off a ramp.
+
+            # this was fixed by finding where the motion is facing so that when the ball is 
+            # going face forward into an obstacle or the non-climbable edge of a ramp it will die
+            # but overspeeding while leaving a reamp is totally fine.
+
+            # also, often when a marble went just beside a ramp it would die hence i added a 10% height limit
+            # so that when the height of along is less than 10% of the ball then it will go right across
+            # as if there was no height difference to begin with.
             for (ax, ay), (bx, by) in ramp.solid_edges():
                 dist, cxp, cyp = distance_point_to_segment(
                     sphere.x, sphere.y, ax, ay, bx, by)
@@ -62,20 +78,36 @@ def resolve_ramp_collisions(spheres, ramps):
                 hs = ramp.surface_at_along(along)
                 if sphere.z - SPHERE_RADIUS >= hs:
                     continue
-                if sphere.speed >= OBSTACLE_LETHAL_SPEED:
-                    sphere.kill("wall")
-                    break
+
+                if hs <= lethal_height:
+                    continue
+
                 nx, ny = sphere.x - cxp, sphere.y - cyp
                 norm = math.hypot(nx, ny)
                 if norm <= 1e-9:
                     nx, ny = -(by - ay), (bx - ax)
                     norm = math.hypot(nx, ny) or 1.0
                 nx, ny = nx / norm, ny / norm
+                into_wall = (sphere.vx * nx + sphere.vy * ny) < 0.0
+                # a contact whose surface height is at or
+                # below this %age of the ramp's height is not an obstacle,
+                # never lethal and the marble goes normally.
+                lethal_height = ramp.height * RAMP_LETHAL_HEIGHT_FRACTION
+                if (
+                    sphere.speed >= OBSTACLE_LETHAL_SPEED
+                    and into_wall
+                    and hs > lethal_height
+                ):
+                    sphere.kill("wall")
+                    break
                 overlap = SPHERE_RADIUS - dist
                 sphere.x += nx * overlap
                 sphere.y += ny * overlap
-                sphere.vx = 0.0
-                sphere.vy = 0.0
+
+                if into_wall:
+                    sphere.vx = 0.0
+                    sphere.vy = 0.0
+
             if not sphere.alive:
                 break
 

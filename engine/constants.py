@@ -48,3 +48,10 @@ RAMP_WIDTH_MAX = 7.0
 RAMP_OVERLAP = 1.0
 
 RAMP_CLEARANCE = 1.5
+
+# while playtesting i noticed that the marbles were often dying when going just past the ramps.
+# while this is not the best solution, it's the best one i could come up with. basically, it crosses 10% 
+# height easily and anything above that is death for marble if above speed limit.
+# if you want to continue with this solution, do playtest the values and find a good one. its 3am and i have no will to playtest
+# - vivaan
+RAMP_LETHAL_HEIGHT_FRACTION = 0.10

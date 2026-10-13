@@ -5,8 +5,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from engine.constants import ARENA_SIZE, RESPAWN_DELAY_TICKS, RPC_TIMEOUT_S, TICK_DT
 from engine.flags import Flag, update_flags
-from engine.map_gen import generate_map
-from engine.physics import clamp_to_arena, resolve_obstacle_collisions, resolve_sphere_collisions
+from engine.map_gen import generate_map, generate_ramps
+from engine.physics import (
+    clamp_to_arena,
+    resolve_obstacle_collisions,
+    resolve_ramp_collisions,
+    resolve_ramps,
+    resolve_sphere_collisions,
+)
 from engine.sphere import Sphere
 from engine.telemetry import TelemetryRecorder
 from engine.vision import audible_sonars, visible_enemies
@@ -57,8 +63,9 @@ class Game:
 
         self.flags = [Flag(team["name"], hx, hy) for team, (hx, hy) in zip(teams, homes)]
         self.obstacles = generate_map(homes, seed=seed)
+        self.ramps = generate_ramps(self.obstacles, homes, seed=seed)
         self.telemetry = TelemetryRecorder()
-        self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks)
+        self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks, self.ramps)
         self._pool = ThreadPoolExecutor(max_workers=max(4, len(teams)))
         self._respawn_at = {}
         # sphere_id -> sonar value emitted last tick (None = silent).
@@ -128,6 +135,8 @@ class Game:
             sphere.integrate(TICK_DT)
 
         clamp_to_arena(self.spheres)
+        resolve_ramps(self.spheres, self.ramps)
+        resolve_ramp_collisions(self.spheres, self.ramps)
         resolve_obstacle_collisions(self.spheres, self.obstacles)
         resolve_sphere_collisions(self.spheres)
         update_flags(self.flags, self.spheres, self.score)

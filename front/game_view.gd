@@ -23,7 +23,7 @@ var have_map := false
 const CAM_PITCH := 0.96
 const CAM_FOV := 50.0
 const ORBIT_SENS := 0.005
-const VIEW_VERSION := 5
+const VIEW_VERSION := 6
 
 var cam_target := Vector3.ZERO
 var cam_dist := 250.0
@@ -52,6 +52,7 @@ var sphere_nodes := {}
 var flag_nodes := {}
 var obstacle_mat: StandardMaterial3D
 var ground_mat: StandardMaterial3D
+var ramp_mat: StandardMaterial3D
 
 
 func _ready() -> void:
@@ -89,7 +90,7 @@ func _ready() -> void:
 	layer.add_child(hud)
 	var hint := Label.new()
 	hint.position = Vector2(12, 34)
-	hint.text = "v5: drag/WASD to orbit · Enter: follow agent · Esc: free cam"
+	hint.text = "v6: drag/WASD to orbit · Enter: follow agent · Esc: free cam"
 	hint.modulate = Color(1, 1, 1, 0.6)
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(hint)
@@ -109,6 +110,10 @@ func _ready() -> void:
 	ground_mat = StandardMaterial3D.new()
 	ground_mat.albedo_color = Color(0.08, 0.09, 0.11)
 	ground_mat.emission_enabled = false
+	ramp_mat = StandardMaterial3D.new()
+	ramp_mat.albedo_color = Color(0.9, 0.55, 0.16)
+	ramp_mat.emission_enabled = false
+	ramp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	tcp.connect_to_host(host, port)
 
@@ -324,6 +329,11 @@ func _build_map(frame: Dictionary) -> void:
 	for o in frame.get("obstacles", []):
 		map_root.add_child(_prism(o.get("points", []), float(o.get("height", 1.0))))
 
+	for r in frame.get("ramps", []):
+		map_root.add_child(_wedge(float(r.get("cx", 0.0)), float(r.get("cy", 0.0)),
+			float(r.get("dx", 1.0)), float(r.get("dy", 0.0)),
+			float(r.get("length", 10.0)), float(r.get("width", 5.0)), float(r.get("height", 3.0))))
+
 	for f in frame.get("flags", []):
 		flag_nodes[String(f.get("team", "?"))] = _make_flag(f)
 
@@ -376,6 +386,53 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 		st.add_vertex(c)
 		st.add_vertex(a)
 		st.add_vertex(b)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	return mi
+
+
+func _wedge(cx: float, cy: float, dx: float, dz: float, length: float, width: float, height: float) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(ramp_mat)
+	var dl := Vector2(dx, dz).normalized()
+	var a := Vector3(dl.x, 0, dl.y)
+	var s := Vector3(-dl.y, 0, dl.x)
+	var c := Vector3(cx, 0, cy)
+	var l2 := length * 0.5
+	var w2 := width * 0.5
+	var low_l := c - a * l2 - s * w2
+	var low_r := c - a * l2 + s * w2
+	var high_l0 := c + a * l2 - s * w2
+	var high_r0 := c + a * l2 + s * w2
+	var high_l := high_l0 + Vector3(0, height, 0)
+	var high_r := high_r0 + Vector3(0, height, 0)
+	# slope
+	var slope_n := (Vector3(0, 1, 0) - a * (height / maxf(length, 0.01))).normalized()
+	st.set_normal(slope_n)
+	st.add_vertex(low_l)
+	st.add_vertex(low_r)
+	st.add_vertex(high_r)
+	st.add_vertex(low_l)
+	st.add_vertex(high_r)
+	st.add_vertex(high_l)
+	# sides
+	st.set_normal(-s)
+	st.add_vertex(low_l)
+	st.add_vertex(high_l0)
+	st.add_vertex(high_l)
+	st.set_normal(s)
+	st.add_vertex(low_r)
+	st.add_vertex(high_r)
+	st.add_vertex(high_r0)
+	# tall back face at the high end
+	st.set_normal(a)
+	st.add_vertex(high_l0)
+	st.add_vertex(high_r0)
+	st.add_vertex(high_r)
+	st.add_vertex(high_l0)
+	st.add_vertex(high_r)
+	st.add_vertex(high_l)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	return mi

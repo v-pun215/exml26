@@ -53,7 +53,7 @@ def _serve_live(args):
                 try:
                     _send(conn, build_map_frame(
                         game.telemetry.match_id, game.obstacles,
-                        game.flags, game.teams, game.max_ticks))
+                        game.flags, game.teams, game.max_ticks, game.ramps))
                 except OSError:
                     conn.close()
                     conn = None

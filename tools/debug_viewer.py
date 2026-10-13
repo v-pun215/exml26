@@ -23,6 +23,7 @@ FLAG_COLORS = {
 }
 HIGHLIGHT_COLOR = (255, 255, 0)
 OBSTACLE_COLOR = (90, 90, 90)
+RAMP_COLOR = (230, 140, 40)
 BG_COLOR = (20, 20, 20)
 
 
@@ -44,6 +45,14 @@ def draw_obstacles(screen, obstacles):
     for obstacle in obstacles:
         screen_points = [world_to_screen(px, py) for px, py in obstacle.points]
         pygame.draw.polygon(screen, OBSTACLE_COLOR, screen_points)
+
+
+def draw_ramps(screen, ramps):
+    for ramp in ramps:
+        corners = [world_to_screen(px, py) for px, py in ramp.corners()]
+        pygame.draw.polygon(screen, RAMP_COLOR, corners, 2)
+        # highend edge (uphill dir)
+        pygame.draw.line(screen, RAMP_COLOR, corners[2], corners[3], 3)
 
 
 def draw_flags(screen, flags):
@@ -90,6 +99,7 @@ def main():
 
         screen.fill(BG_COLOR)
         draw_obstacles(screen, game.obstacles)
+        draw_ramps(screen, game.ramps)
         draw_flags(screen, game.flags)
         draw_spheres(screen, game.spheres)
 

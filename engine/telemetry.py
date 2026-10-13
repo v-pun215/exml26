@@ -9,7 +9,7 @@ from engine.constants import ARENA_SIZE, GRAVITY, JUMP_SPEED, SPHERE_RADIUS, TIC
 MAX_JUMP_HEIGHT = (JUMP_SPEED ** 2) / (2 * -GRAVITY)
 
 
-def build_map_frame(match_id, obstacles, flags, teams, max_ticks):
+def build_map_frame(match_id, obstacles, flags, teams, max_ticks, ramps=None):
     return {
         "type": "map",
         "match_id": match_id,
@@ -23,6 +23,7 @@ def build_map_frame(match_id, obstacles, flags, teams, max_ticks):
             {"points": o.points, "height": o.height}
             for o in obstacles
         ],
+        "ramps": [r.to_state_dict() for r in (ramps or [])],
         "flags": [f.to_state_dict() for f in flags],
     }
 
@@ -54,8 +55,8 @@ class TelemetryRecorder:
         self.file_path = out_path / f"{self.match_id}.jsonl"
         self._fh = open(self.file_path, "a", buffering=1)
 
-    def record_map(self, obstacles, flags, teams, max_ticks):
-        frame = build_map_frame(self.match_id, obstacles, flags, teams, max_ticks)
+    def record_map(self, obstacles, flags, teams, max_ticks, ramps=None):
+        frame = build_map_frame(self.match_id, obstacles, flags, teams, max_ticks, ramps)
         self._fh.write(json.dumps(frame) + "\n")
 
     def record_tick(self, tick, spheres, flags, score, respawn_at, deaths=None):

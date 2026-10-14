@@ -1,20 +1,3 @@
-"""Anvil doctrine (blue): dual attack lanes + alert-flexible defense.
-
-  players 1,2 attackers: run opposite offset lanes at high cruise. Touch,
-    grab, run home. Player 2 aborts back to defense on a fresh intruder
-    alert; player 1 never aborts.
-  player 3 defender: holds home, chases thieves deep, and pings
-    {"kind": "intruder", ...} whenever an enemy is near home or our flag
-    is stolen. Carriers ping {"kind": "has-flag", ...}.
-
-Differs from red's Hammer: two attackers instead of attacker+rover, and
-defense is sonar-driven (alert collapses P2 back) rather than fixed roles.
-Death spots are steered around (internal obstacle map, separate channel).
-
-NOTE: one ModelWorker process serves a whole team, so module globals are
-shared across that team's spheres. decide() must stay fast (<30ms).
-"""
-
 import math
 
 _home = None
@@ -138,17 +121,17 @@ def decide(observation):
     px, py = -dy / L, dx / L
 
     ping = None
-    if player in (1, 2):  # attackers, mirrored lanes
+    if player in (1, 2):
         lane = -20.0 if player == 1 else 20.0
         if carrying:
             tx, ty = hx, hy
             ping = {"kind": "has-flag", "player": player, "tick": tick}
         elif player == 2 and tick - _alert_tick < 60 and not own.get("at_home", True):
-            tx, ty = own.get("x", hx), own.get("y", hy)  # abort: help defense
+            tx, ty = own.get("x", hx), own.get("y", hy)
         else:
             tx, ty = ex + px * lane, ey + py * lane
         arrive, cruise = 2.5, 15.0
-    else:  # defender: guard, chase deep, raise the alarm
+    else:
         intruder = (not own.get("at_home", True)) or any(
             math.hypot(e.get("x", 0) - hx, e.get("y", 0) - hy) < 14.0 for e in enemies)
         if intruder:

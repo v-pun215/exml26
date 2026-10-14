@@ -28,6 +28,7 @@ OBSTACLE_MIN_RADIUS = 2.0
 OBSTACLE_MAX_RADIUS = 6.0
 OBSTACLE_MIN_POINTS = 4
 OBSTACLE_MAX_POINTS = 8
+OBSTACLE_MIN_HEIGHT = 1.5
 OBSTACLE_MAX_HEIGHT = 4.0
 OBSTACLE_MIN_SPACING = 10.0
 SPAWN_EXCLUSION_RADIUS = 18.0
@@ -40,6 +41,7 @@ VISION_HALF_ANGLE_DEG = 35.0
 SONAR_RANGE=10.0
 
 RAMP_MAX_COUNT = 12
+RAMP_RING_COUNT = 3
 RAMP_LENGTH_MIN = 8.0
 RAMP_LENGTH_MAX = 14.0
 RAMP_WIDTH_MIN = 4.0
@@ -47,11 +49,4 @@ RAMP_WIDTH_MAX = 7.0
 
 RAMP_OVERLAP = 1.0
 
-RAMP_CLEARANCE = 1.5
-
-# while playtesting i noticed that the marbles were often dying when going just past the ramps.
-# while this is not the best solution, it's the best one i could come up with. basically, it crosses 10% 
-# height easily and anything above that is death for marble if above speed limit.
-# if you want to continue with this solution, do playtest the values and find a good one. its 3am and i have no will to playtest
-# - vivaan
 RAMP_LETHAL_HEIGHT_FRACTION = 0.10

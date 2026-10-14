@@ -1,12 +1,4 @@
 extends Node3D
-## Top-down 3D viewer for the exml26 match sim.
-##
-## Run the bridge first, then press Play:
-##     python3 tools/godot_bridge.py --seed 7
-## The bridge streams newline-delimited JSON (`map` frame, then `tick`
-## frames, same schema as data/telemetry/*.jsonl). This client renders the
-## newest tick it has every frame. Coordinate map: engine (x, y, z) ->
-## Godot (x, z, y), so +y ("down" on the 2D debug viewer) is +Z here.
 
 @export var host := "127.0.0.1"
 @export var port := 8765
@@ -125,8 +117,6 @@ func _ready() -> void:
 
 
 func _make_metal_texture() -> ImageTexture:
-	# Shared grayscale detail: brushed bands + white dots so rolling reads
-	# clearly. Team tint comes from albedo_color multiplying this.
 	var img := Image.create(128, 64, false, Image.FORMAT_RGB8)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1234
@@ -305,9 +295,6 @@ func _process(delta: float) -> void:
 
 
 func _display_pose(sid: int) -> Array:
-	# Interpolated render pose between the last two tick snapshots. Trails
-	# real time by ~one tick but never overshoots, so neither balls nor the
-	# camera can judder back and forth.
 	if not agent_hist.has(sid):
 		return [Vector3.ZERO, 0.0]
 	var h: Dictionary = agent_hist[sid]
@@ -337,8 +324,6 @@ func _update_agent_poses() -> void:
 
 
 func _roll_agents(delta: float) -> void:
-	# True marble rolling: rotate each mesh about the ground-contact axis
-	# derived from its velocity. Runs at render rate for smooth motion.
 	for sid in sphere_nodes.keys():
 		var node := sphere_nodes[sid] as Node3D
 		if node == null or not node.visible or not agent_vel.has(sid) or not agent_meshes.has(sid):
@@ -523,7 +508,6 @@ func _wedge(cx: float, cy: float, dx: float, dz: float, length: float, width: fl
 	var high_r0 := c + a * l2 + s * w2
 	var high_l := high_l0 + Vector3(0, height, 0)
 	var high_r := high_r0 + Vector3(0, height, 0)
-	# slope
 	var slope_n := (Vector3(0, 1, 0) - a * (height / maxf(length, 0.01))).normalized()
 	st.set_normal(slope_n)
 	st.add_vertex(low_l)
@@ -532,7 +516,6 @@ func _wedge(cx: float, cy: float, dx: float, dz: float, length: float, width: fl
 	st.add_vertex(low_l)
 	st.add_vertex(high_r)
 	st.add_vertex(high_l)
-	# sides
 	st.set_normal(-s)
 	st.add_vertex(low_l)
 	st.add_vertex(high_l0)
@@ -541,7 +524,6 @@ func _wedge(cx: float, cy: float, dx: float, dz: float, length: float, width: fl
 	st.add_vertex(low_r)
 	st.add_vertex(high_r)
 	st.add_vertex(high_r0)
-	# tall back face at the high end
 	st.set_normal(a)
 	st.add_vertex(high_l0)
 	st.add_vertex(high_r0)

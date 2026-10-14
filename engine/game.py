@@ -9,6 +9,7 @@ from engine.map_gen import generate_map, generate_ramps
 from engine.physics import (
     clamp_to_arena,
     resolve_obstacle_collisions,
+    resolve_obstacle_tops,
     resolve_ramp_collisions,
     resolve_ramps,
     resolve_sphere_collisions,
@@ -20,7 +21,6 @@ from rpc.worker import ModelWorker
 
 
 def _normalize_action(action):
-    """Accept 3-tuple (throttle, turn, jump) or 4-tuple (+ sonar_val)."""
     try:
         if not isinstance(action, (tuple, list)):
             return 0.0, 0.0, False, None
@@ -68,13 +68,7 @@ class Game:
         self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks, self.ramps)
         self._pool = ThreadPoolExecutor(max_workers=max(4, len(teams)))
         self._respawn_at = {}
-        # sphere_id -> sonar value emitted last tick (None = silent).
-        # Delivered with a 1-tick delay via audible_sonars().
         self._last_sonar = {}
-        # Team death reports, newest last. Each is a struct:
-        # {"player": int, "team": str, "tick": int,
-        #  "x": float, "y": float, "reason": "wall"|"player"}.
-        # Broadcast to all alive teammates regardless of range/obstacles.
         self._death_log = []
 
     def _collect_team_actions(self, team_name, team_spheres, all_alive, own_flag_state, other_flags_state):
@@ -93,9 +87,7 @@ class Game:
                 "teammates": [s.to_state_dict() for s in team_spheres if s.id != sphere.id],
                 "score": dict(self.score),
                 "sonar_receive": sonars,
-                # legacy typo, kept so existing models don't KeyError
                 "sonar_recieve": sonars,
-                # teammate death reports (team-only, no range/LOS filter)
                 "death_messages": deaths,
             }
             actions[sphere.id] = worker.get_action(observation, RPC_TIMEOUT_S)
@@ -125,7 +117,6 @@ class Game:
             for sphere in by_team[team_name]:
                 throttle, turn, jump, sonar_val = _normalize_action(actions.get(sphere.id))
                 sphere.apply_action(throttle, turn, jump, sonar_val)
-                # Store emission for delivery next tick. None = silent.
                 if sonar_val is not None:
                     self._last_sonar[sphere.id] = sonar_val
                 elif sphere.id in self._last_sonar:
@@ -138,12 +129,11 @@ class Game:
         resolve_ramps(self.spheres, self.ramps)
         resolve_ramp_collisions(self.spheres, self.ramps)
         resolve_obstacle_collisions(self.spheres, self.obstacles)
+        resolve_obstacle_tops(self.spheres, self.obstacles)
         resolve_sphere_collisions(self.spheres)
         update_flags(self.flags, self.spheres, self.score)
         self._collect_deaths()
         self._process_respawns()
-        # Drop stale emissions from dead spheres so a respawn doesn't
-        # rebroadcast a value from before death.
         alive_ids = {s.id for s in self.spheres if s.alive}
         for sid in list(self._last_sonar):
             if sid not in alive_ids:
@@ -165,7 +155,7 @@ class Game:
                 "y": sphere.death_y,
                 "reason": sphere.death_reason or "unknown",
             })
-        del self._death_log[:-200]  # bound growth; deaths are rare
+        del self._death_log[:-200]
 
     def _process_respawns(self):
         for sphere in self.spheres:

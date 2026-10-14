@@ -1,19 +1,3 @@
-"""Hammer doctrine (red): fixed roles, flag-first CTF.
-
-  player 1 attacker: run the enemy home, touch the flag, run it back.
-  player 2 defender: hold home; if our flag is stolen, chase the thief and
-    kill them (touch can't recover a flag — only killing the carrier
-    drops it, and kills need higher speed, so chase downhill of them).
-  player 3 rover: second attacker on an offset lane; escorts player 1 home
-    when it hears a has-flag sonar ping.
-
-Sonar: carriers ping {"kind": "has-flag", "player", "tick"}.
-Death spots are steered around (internal obstacle map, separate channel).
-
-NOTE: one ModelWorker process serves a whole team, so module globals are
-shared across that team's spheres. decide() must stay fast (<30ms).
-"""
-
 import math
 
 _home = None
@@ -114,7 +98,7 @@ def decide(observation):
     if own.get("at_home"):
         _home = (own.get("x", s["x"]), own.get("y", s["y"]))
     hx, hy = _home if _home else (s["x"], s["y"])
-    ex, ey = -hx, -hy  # enemy home mirrors ours across the arena
+    ex, ey = -hx, -hy
 
     score = observation.get("score", {}) or {}
     if _last_score is not None and score.get(team, 0) > _last_score:
@@ -137,18 +121,18 @@ def decide(observation):
     ax, ay = _avoid(s["x"], s["y"], deaths)
 
     ping = None
-    if player == 1:  # attacker
+    if player == 1:
         if carrying:
             tx, ty = hx, hy
             ping = _ping(player, tick)
         else:
             tx, ty = ex, ey
-    elif player == 2:  # defender
+    elif player == 2:
         if not own.get("at_home", True):
-            tx, ty = own.get("x", hx), own.get("y", hy)  # chase the thief
+            tx, ty = own.get("x", hx), own.get("y", hy)
         else:
             tx, ty = hx, hy
-    else:  # rover: escort on has-flag, else offset lane
+    else:
         if carrying:
             tx, ty = hx, hy
             ping = _ping(player, tick)

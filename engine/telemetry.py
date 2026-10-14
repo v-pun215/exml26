@@ -4,8 +4,6 @@ from pathlib import Path
 
 from engine.constants import ARENA_SIZE, GRAVITY, JUMP_SPEED, SPHERE_RADIUS, TICK_RATE
 
-#: Apex of a jump above rest height; sent in the map frame so viewers can
-#: normalize height-based effects without hardcoding physics.
 MAX_JUMP_HEIGHT = (JUMP_SPEED ** 2) / (2 * -GRAVITY)
 
 

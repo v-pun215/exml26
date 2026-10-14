@@ -7,14 +7,15 @@ from engine.constants import (
     OBSTACLE_MAX_HEIGHT,
     OBSTACLE_MAX_POINTS,
     OBSTACLE_MAX_RADIUS,
+    OBSTACLE_MIN_HEIGHT,
     OBSTACLE_MIN_POINTS,
     OBSTACLE_MIN_RADIUS,
     OBSTACLE_MIN_SPACING,
-    RAMP_CLEARANCE,
     RAMP_LENGTH_MAX,
     RAMP_LENGTH_MIN,
     RAMP_MAX_COUNT,
     RAMP_OVERLAP,
+    RAMP_RING_COUNT,
     RAMP_WIDTH_MAX,
     RAMP_WIDTH_MIN,
     SPAWN_EXCLUSION_RADIUS,
@@ -108,6 +109,10 @@ def _too_close(cx, cy, bounding_radius, placed, exclusion_zones):
     return False
 
 
+def _radial_density_weight(r):
+    return min(1.0, 0.25 + 0.75 * r)
+
+
 def generate_map(spawn_points, seed=None):
     rng = random.Random(seed)
     half = ARENA_SIZE / 2.0
@@ -120,62 +125,127 @@ def generate_map(spawn_points, seed=None):
         attempts += 1
         cx = rng.uniform(-half + OBSTACLE_MAX_RADIUS, half - OBSTACLE_MAX_RADIUS)
         cy = rng.uniform(-half + OBSTACLE_MAX_RADIUS, half - OBSTACLE_MAX_RADIUS)
+        r = math.hypot(cx, cy) / half
+        if rng.random() > _radial_density_weight(r):
+            continue
         points = _make_polygon(rng, cx, cy)
         centroid = polygon_centroid(points)
         bounding_radius = polygon_bounding_radius(points, centroid)
         if _too_close(centroid[0], centroid[1], bounding_radius, obstacles, exclusion_zones):
             continue
-        height = rng.uniform(1.5, OBSTACLE_MAX_HEIGHT)
+        height_ceiling = OBSTACLE_MIN_HEIGHT + (OBSTACLE_MAX_HEIGHT - OBSTACLE_MIN_HEIGHT) * min(1.0, max(0.15, r))
+        height = rng.uniform(OBSTACLE_MIN_HEIGHT, height_ceiling)
         obstacles.append(Obstacle(points, height))
 
     return obstacles
 
 
-def _ramp_fits(cx, cy, dx, dy, length, width, obstacles, target, exclusion_zones):
+def _ramp_fits(low_point, high_point, corners, obstacles, target, exclusion_zones):
     half = ARENA_SIZE / 2.0 - 1.0
-    ramp = Ramp(cx, cy, dx, dy, length, width, 0.0)
-    for px, py in ramp.corners():
+    for px, py in corners:
         if abs(px) > half or abs(py) > half:
             return False
 
-    low = (cx - dx * length / 2.0, cy - dy * length / 2.0)
-    high = (cx + dx * length / 2.0, cy + dy * length / 2.0)
     for ob in obstacles:
-        inside_low = point_in_polygon(low[0], low[1], ob.points)
-        dist_low, _ = closest_point_on_polygon(low[0], low[1], ob.points)
-        if inside_low or dist_low < 0.5:
+        if ob is target:
+            continue
+        if point_in_polygon(low_point[0], low_point[1], ob.points):
             return False
-        if ob is not target:
-            if point_in_polygon(high[0], high[1], ob.points):
-                return False
+        if point_in_polygon(high_point[0], high_point[1], ob.points):
+            return False
+        dist_low, _ = closest_point_on_polygon(low_point[0], low_point[1], ob.points)
+        if dist_low < 0.5:
+            return False
+
     for ex, ey, eradius in exclusion_zones:
-        if math.hypot(cx - ex, cy - ey) < eradius:
-            return False
-        if math.hypot(low[0] - ex, low[1] - ey) < eradius:
+        if math.hypot(low_point[0] - ex, low_point[1] - ey) < eradius:
             return False
     return True
 
 
-def generate_ramps(obstacles, spawn_points, seed=None, count=RAMP_MAX_COUNT):
+def _edge_outward_normal(ob, edge_index):
+    ax, ay = ob.points[edge_index]
+    bx, by = ob.points[(edge_index + 1) % len(ob.points)]
+    mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+    ex, ey = bx - ax, by - ay
+    elen = math.hypot(ex, ey)
+    if elen < 1.0:
+        return None
 
+    nx, ny = ey / elen, -ex / elen
+    if nx * (mx - ob.centroid[0]) + ny * (my - ob.centroid[1]) < 0:
+        nx, ny = -nx, -ny
+
+    return mx, my, nx, ny, elen
+
+
+def _angle_gap(angle_a, angle_b):
+    gap = (angle_a - angle_b) % (2 * math.pi)
+    return gap - 2 * math.pi if gap > math.pi else gap
+
+
+def _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng):
+    normal = _edge_outward_normal(ob, edge_index)
+    if normal is None:
+        return None
+    mx, my, nx, ny, elen = normal
+
+    length = rng.uniform(RAMP_LENGTH_MIN, RAMP_LENGTH_MAX)
+    width = min(rng.uniform(RAMP_WIDTH_MIN, RAMP_WIDTH_MAX), elen)
+    dx, dy = -nx, -ny
+
+    hx, hy = mx + nx * RAMP_OVERLAP, my + ny * RAMP_OVERLAP
+    cx, cy = hx - dx * length / 2.0, hy - dy * length / 2.0
+    lx, ly = hx - dx * length, hy - dy * length
+
+    candidate = Ramp(cx, cy, dx, dy, length, width, ob.height)
+    if not _ramp_fits((lx, ly), (hx, hy), candidate.corners(), obstacles, ob, exclusion_zones):
+        return None
+    return candidate
+
+
+def _ring_index(ob, half, rings):
+    r = min(1.0, math.hypot(ob.centroid[0], ob.centroid[1]) / half)
+    return min(rings - 1, int(r * rings))
+
+
+def generate_ramps(obstacles, spawn_points, seed=None, count=RAMP_MAX_COUNT, rings=RAMP_RING_COUNT):
     rng = random.Random(seed)
     exclusion_zones = [(sx, sy, SPAWN_EXCLUSION_RADIUS) for sx, sy in spawn_points]
-    order = list(obstacles)
-    rng.shuffle(order)
+    half = ARENA_SIZE / 2.0
+
+    remaining = list(obstacles)
+    rng.shuffle(remaining)
+    by_ring = [[ob for ob in remaining if _ring_index(ob, half, rings) == ring] for ring in range(rings)]
+
     ramps = []
-    for ob in order:
-        if len(ramps) >= count:
-            break
-        ox, oy = ob.centroid
-        for _ in range(12):
-            ang = rng.uniform(0.0, 2 * math.pi)
-            dx, dy = math.cos(ang), math.sin(ang)
-            length = rng.uniform(RAMP_LENGTH_MIN, RAMP_LENGTH_MAX)
-            width = rng.uniform(RAMP_WIDTH_MIN, RAMP_WIDTH_MAX)
-            dist = ob.bounding_radius + length / 2.0 - RAMP_OVERLAP
-            cx, cy = ox - dx * dist, oy - dy * dist
-            if not _ramp_fits(cx, cy, dx, dy, length, width, obstacles, ob, exclusion_zones):
+    slots_per_ring = max(1, count // rings)
+    for ring_obstacles in by_ring:
+        for slot in range(slots_per_ring):
+            if len(ramps) >= count or not ring_obstacles:
+                break
+            slot_angle = 2 * math.pi * slot / slots_per_ring
+            tangent_dx, tangent_dy = -math.sin(slot_angle), math.cos(slot_angle)
+
+            ring_obstacles.sort(key=lambda ob: abs(_angle_gap(math.atan2(ob.centroid[1], ob.centroid[0]), slot_angle)))
+
+            chosen_ramp = None
+            chosen_obstacle = None
+            for ob in ring_obstacles[: max(3, len(ring_obstacles) // 4)]:
+                normals = [(i, _edge_outward_normal(ob, i)) for i in range(len(ob.points))]
+                normals = [(i, n) for i, n in normals if n is not None]
+                normals.sort(key=lambda item: -abs(item[1][2] * tangent_dx + item[1][3] * tangent_dy))
+
+                for edge_index, _ in normals:
+                    ramp = _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng)
+                    if ramp is not None:
+                        chosen_ramp, chosen_obstacle = ramp, ob
+                        break
+                if chosen_ramp is not None:
+                    break
+
+            if chosen_ramp is None:
                 continue
-            ramps.append(Ramp(cx, cy, dx, dy, length, width, ob.height + RAMP_CLEARANCE))
-            break
+            ramps.append(chosen_ramp)
+            ring_obstacles.remove(chosen_obstacle)
     return ramps

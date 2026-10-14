@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Stream the match to the Godot top-down viewer over TCP (newline-delimited JSON).
-
-Run from the repo root, then press Play in front/ (game_view.gd connects here):
-
-    python3 tools/godot_bridge.py --seed 7
-    python3 tools/godot_bridge.py --replay data/telemetry/<match>.jsonl
-
-Protocol: one JSON object per line. `map` frame first (telemetry schema),
-then `tick` frames (telemetry schema plus a `deaths` list). Free-run pacing,
-no client acks: Godot renders the newest tick it has each frame. If Godot
-(re)connects mid-match the map frame is resent.
-"""
 
 import argparse
 import json

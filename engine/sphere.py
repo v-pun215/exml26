@@ -16,7 +16,6 @@ class Sphere:
     def __init__(self, sphere_id, team, x, y, z=SPHERE_RADIUS, player=None):
         self.id = sphere_id
         self.team = team
-        # 1-based index within the team, constant for the whole game.
         self.player = player if player is not None else sphere_id + 1
         self.start_x = x
         self.start_y = y
@@ -95,8 +94,6 @@ class Sphere:
         self.vx = 0.0
         self.vy = 0.0
         self.vz = 0.0
-        # Death report, maintained separately from the sonar channel.
-        # Game.step() collects this into the team death log once.
         self.death_reason = reason
         self.death_x = self.x
         self.death_y = self.y

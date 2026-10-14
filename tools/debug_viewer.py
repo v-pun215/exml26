@@ -51,7 +51,6 @@ def draw_ramps(screen, ramps):
     for ramp in ramps:
         corners = [world_to_screen(px, py) for px, py in ramp.corners()]
         pygame.draw.polygon(screen, RAMP_COLOR, corners, 2)
-        # highend edge (uphill dir)
         pygame.draw.line(screen, RAMP_COLOR, corners[2], corners[3], 3)
 
 

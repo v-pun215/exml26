@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -21,6 +22,30 @@ FLAG_COLORS = {
     "red": (255, 170, 170),
     "blue": (170, 190, 255),
 }
+_FALLBACK_TEAM_PALETTE = [
+    (200, 60, 60),
+    (60, 100, 220),
+    (60, 180, 90),
+    (220, 170, 40),
+    (170, 80, 200),
+    (40, 180, 180),
+    (230, 120, 40),
+    (130, 130, 130),
+]
+
+
+def _team_color(team, table):
+    if team in table:
+        return table[team]
+    idx = int(hashlib.md5(str(team).encode()).hexdigest(), 16) % len(_FALLBACK_TEAM_PALETTE)
+    return _FALLBACK_TEAM_PALETTE[idx]
+
+
+def _flag_color(team):
+    if team in FLAG_COLORS:
+        return FLAG_COLORS[team]
+    r, g, b = _team_color(team, TEAM_COLORS)
+    return (min(255, r + 60), min(255, g + 60), min(255, b + 60))
 HIGHLIGHT_COLOR = (255, 255, 0)
 OBSTACLE_COLOR = (90, 90, 90)
 RAMP_COLOR = (230, 140, 40)
@@ -28,8 +53,13 @@ BG_COLOR = (20, 20, 20)
 
 
 def load_teams(path="teams.json"):
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"teams file not found: {path}")
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"invalid JSON in {path}: {e}")
 
 
 def world_to_screen(x, y):
@@ -57,7 +87,7 @@ def draw_ramps(screen, ramps):
 def draw_flags(screen, flags):
     for flag in flags:
         cx, cy = world_to_screen(flag.x, flag.y)
-        color = FLAG_COLORS.get(flag.team, (255, 255, 255))
+        color = _flag_color(flag.team)
         pygame.draw.rect(screen, color, (cx - 5, cy - 5, 10, 10))
 
 
@@ -66,7 +96,7 @@ def draw_spheres(screen, spheres):
         if not sphere.alive:
             continue
         cx, cy = world_to_screen(sphere.x, sphere.y)
-        base = TEAM_COLORS.get(sphere.team, (255, 255, 255))
+        base = _team_color(sphere.team, TEAM_COLORS)
         height_fraction = max(0.0, min(1.0, (sphere.z - SPHERE_RADIUS) / MAX_JUMP_HEIGHT))
         color = lerp_color(base, HIGHLIGHT_COLOR, height_fraction)
         pygame.draw.circle(screen, color, (int(cx), int(cy)), 7)

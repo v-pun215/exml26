@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://cc78lpjjyu4fa"]
+
+[ext_resource type="Script" uid="uid://c80uj7pad8mvd" path="res://game_view.gd" id="1"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ua1sf"]
+
+[sub_resource type="Sky" id="Sky_454cp"]
+sky_material = SubResource("ProceduralSkyMaterial_ua1sf")
+
+[sub_resource type="Environment" id="Environment_njevn"]
+background_mode = 2
+sky = SubResource("Sky_454cp")
+
+[node name="Node3D" type="Node3D" unique_id=2081639702]
+script = ExtResource("1")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=2146611295]
+transform = Transform3D(1, 0, 0, 0, 0.017895892, 0.99983984, 0, -0.99983984, 0.017895892, 0, 220, 0)
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=656162886]
+environment = SubResource("Environment_njevn")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1347409490]
+transform = Transform3D(1, 0, 0, 0, 0.017895892, 0.99983984, 0, -0.99983984, 0.017895892, 0, 0, 0)

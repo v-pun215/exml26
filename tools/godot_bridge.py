@@ -20,6 +20,20 @@ def _send(sock, frame):
     sock.sendall((json.dumps(frame) + "\n").encode("utf-8"))
 
 
+def _build_game_over_frame(match_id, tick, score, teams):
+    score = dict(score or {})
+    best = max(score.values(), default=0)
+    leaders = [name for name, s in score.items() if s == best] if score else []
+    return {
+        "type": "game_over",
+        "match_id": match_id,
+        "tick": tick,
+        "winner": leaders[0] if len(leaders) == 1 else "",
+        "score": score,
+        "teams": [{"name": t.get("name", "?"), "color": t.get("color", "#ffffff")} for t in teams],
+    }
+
+
 def _serve_live(args):
     with open(args.teams) as f:
         teams = json.load(f)
@@ -60,6 +74,12 @@ def _serve_live(args):
             remaining = 1.0 / args.fps - elapsed
             if remaining > 0:
                 time.sleep(remaining)
+        if conn is not None:
+            try:
+                _send(conn, _build_game_over_frame(
+                    game.telemetry.match_id, game.tick, game.score, game.teams))
+            except OSError:
+                pass
         print(f"bridge: match over at tick {game.tick}, score: {game.score}")
     finally:
         game.telemetry.close()
@@ -87,6 +107,13 @@ def _serve_replay(args):
                     _send(conn, frame)
                     if frame.get("type") == "tick":
                         time.sleep(1.0 / args.fps)
+                map_frame = next((f for f in frames if f.get("type") == "map"), None)
+                last_score = next((f["score"] for f in reversed(frames) if "score" in f), {})
+                last_tick = next((f["tick"] for f in reversed(frames) if "tick" in f), 0)
+                if map_frame:
+                    _send(conn, _build_game_over_frame(
+                        map_frame.get("match_id", "replay"), last_tick,
+                        last_score, map_frame.get("teams", [])))
                 print("bridge: replay finished")
             except OSError:
                 print("bridge: client disconnected")

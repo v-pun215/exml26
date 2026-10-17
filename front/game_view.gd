@@ -14,15 +14,19 @@ var have_map := false
 
 const CAM_PITCH := 0.96
 const CAM_FOV := 50.0
-const ORBIT_SENS := 0.005
+const LOOK_SENS := 0.0028
+const COL_GRASS_A := Color(0.27, 0.52, 0.20)
+const COL_GRASS_B := Color(0.37, 0.62, 0.25)
 const VIEW_VERSION := 9
 
 var cam_target := Vector3.ZERO
 var cam_dist := 250.0
 var cam_yaw := 0.0
 var cam_pitch := CAM_PITCH
-var last_mp := Vector2.ZERO
-var have_mp := false
+var free_pos := Vector3.ZERO
+var free_yaw := 0.0
+var free_pitch := -CAM_PITCH
+var free_cursor_free := false
 var caption: Label
 
 var last_info := {}
@@ -36,6 +40,7 @@ var enter_was := false
 var esc_was := false
 
 var map_root: Node3D
+var bg_root: Node3D
 var cloud_root: Node3D
 var cloud_clusters := []
 var agent_root: Node3D
@@ -44,6 +49,18 @@ var hud: Label
 
 var team_mats := {}
 var team_colors := {}
+var max_ticks := 0
+var tick_rate := 20
+var match_over := false
+var hint_label: Label
+var game_over_layer: CanvasLayer
+var game_over_root: Control
+var go_box: VBoxContainer
+var winner_label: Label
+var sub_label: Label
+var score_box: VBoxContainer
+var foot_label: Label
+var go_winner_ls: LabelSettings
 var agent_mats := {}
 var agent_meshes := {}
 var agent_vel := {}
@@ -82,6 +99,9 @@ func _ready() -> void:
 	agent_root = Node3D.new()
 	agent_root.name = "Agents"
 	add_child(agent_root)
+	bg_root = Node3D.new()
+	bg_root.name = "Background"
+	add_child(bg_root)
 
 	camera = get_node_or_null("Camera3D") as Camera3D
 	if camera == null:
@@ -117,12 +137,12 @@ func _ready() -> void:
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.text = "waiting for bridge..."
 	layer.add_child(hud)
-	var hint := Label.new()
-	hint.position = Vector2(12, 34)
-	hint.text = "v9: drag orbit · WASD move · wheel zoom · Enter follow · Esc free"
-	hint.modulate = Color(1, 1, 1, 0.6)
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(hint)
+	hint_label = Label.new()
+	hint_label.position = Vector2(12, 34)
+	hint_label.text = "Enter next bot · Esc free cam"
+	hint_label.modulate = Color(1, 1, 1, 0.55)
+	hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(hint_label)
 	caption = Label.new()
 	caption.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	caption.offset_top = -52.0
@@ -314,6 +334,141 @@ func _spawn_aurora_curtains() -> void:
 		curtain_root.add_child(quad)
 
 
+func _bg_height(x: float, z: float, flat_r: float, span_r: float) -> float:
+	var r := Vector2(x, z).length()
+	if r <= flat_r:
+		return -1.2
+	var t := clampf((r - flat_r) / maxf(span_r - flat_r, 1.0), 0.0, 1.0)
+	var n := 0.0
+	var amp := 1.0
+	var freq := 0.0042
+	var norm := 0.0
+	for o in range(4):
+		var ridge := 1.0 - absf(sin(x * freq + 1.7 + float(o) * 3.1) * cos(z * freq * 1.3 - 2.3 + float(o) * 1.7))
+		n += ridge * amp
+		norm += amp
+		amp *= 0.55
+		freq *= 2.15
+	n /= norm
+	n = n * n
+	return -1.2 + t * t * (70.0 + 300.0 * n)
+
+
+func _add_bg_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, base: Color) -> void:
+	var n := (b - a).cross(c - a)
+	n = n.normalized() if n.length() > 0.0001 else Vector3(0, 1, 0)
+	if n.y < 0.0:
+		n = -n
+	var j := 0.93 + _hash01((a.x + b.x + c.x) * 0.37 + 17.0, (a.z + b.z + c.z) * 0.41 + 23.0) * 0.12
+	var col := Color(base.r * j, base.g * j, base.b * j)
+	st.set_normal(n)
+	st.set_color(col)
+	st.add_vertex(a)
+	st.set_color(col)
+	st.add_vertex(b)
+	st.set_color(col)
+	st.add_vertex(c)
+
+
+func _spawn_background() -> void:
+	_clear(bg_root)
+	var flat_r := arena * 0.5 + 50.0
+	var span_r := 2400.0
+	var step := 80.0
+	var divisions := int(span_r * 2.0 / step)
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ix in range(divisions):
+		for iz in range(divisions):
+			var x0 := -span_r + float(ix) * step
+			var x1 := x0 + step
+			var z0 := -span_r + float(iz) * step
+			var z1 := z0 + step
+			var p00 := Vector3(x0, _bg_height(x0, z0, flat_r, span_r), z0)
+			var p10 := Vector3(x1, _bg_height(x1, z0, flat_r, span_r), z0)
+			var p11 := Vector3(x1, _bg_height(x1, z1, flat_r, span_r), z1)
+			var p01 := Vector3(x0, _bg_height(x0, z1, flat_r, span_r), z1)
+			var base := COL_GRASS_A if (ix + iz) % 2 == 0 else COL_GRASS_B
+			if _hash01(float(ix) * 3.7 + 91.0, float(iz) * 5.1 + 91.0) < 0.5:
+				_add_bg_facet(st, p00, p10, p11, base)
+				_add_bg_facet(st, p00, p11, p01, base)
+			else:
+				_add_bg_facet(st, p00, p10, p01, base)
+				_add_bg_facet(st, p10, p11, p01, base)
+	var terrain_mat := StandardMaterial3D.new()
+	terrain_mat.vertex_color_use_as_albedo = true
+	terrain_mat.roughness = 1.0
+	terrain_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = terrain_mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bg_root.add_child(mi)
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.32, 0.22, 0.14)
+	trunk_mat.roughness = 0.95
+	var canopy_a := StandardMaterial3D.new()
+	canopy_a.albedo_color = Color(0.16, 0.38, 0.16)
+	canopy_a.roughness = 0.9
+	var canopy_b := StandardMaterial3D.new()
+	canopy_b.albedo_color = Color(0.24, 0.5, 0.2)
+	canopy_b.roughness = 0.9
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 71
+	var placed := 0
+	var attempts := 0
+	while placed < 260 and attempts < 3000:
+		attempts += 1
+		var ang := rng.randf() * TAU
+		var dist := rng.randf_range(flat_r + 20.0, span_r * 0.92)
+		var x := cos(ang) * dist
+		var z := sin(ang) * dist
+		var h := _bg_height(x, z, flat_r, span_r)
+		if h > 85.0:
+			continue
+		bg_root.add_child(_make_tree(rng, x, z, h,
+			trunk_mat, canopy_a if placed % 2 == 0 else canopy_b))
+		placed += 1
+
+
+func _make_tree(rng: RandomNumberGenerator, x: float, z: float, ground_h: float,
+		trunk_mat: StandardMaterial3D, canopy_mat: StandardMaterial3D) -> Node3D:
+	var root := Node3D.new()
+	root.position = Vector3(x, ground_h - 0.4, z)
+	root.rotation.y = rng.randf() * TAU
+	root.scale = Vector3.ONE * rng.randf_range(0.8, 2.2)
+
+	var trunk := MeshInstance3D.new()
+	var tm := CylinderMesh.new()
+	tm.top_radius = 0.22
+	tm.bottom_radius = 0.4
+	tm.height = 3.0
+	tm.radial_segments = 6
+	trunk.mesh = tm
+	trunk.position = Vector3(0, 1.5, 0)
+	trunk.material_override = trunk_mat
+	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(trunk)
+
+	for layer in [[2.4, 4.2, 3.2], [1.7, 3.0, 5.4]]:
+		var cone := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = float(layer[0])
+		cm.height = float(layer[1])
+		cm.radial_segments = 7
+		cone.mesh = cm
+		cone.position = Vector3(0, float(layer[2]), 0)
+		cone.material_override = canopy_mat
+		cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(cone)
+
+	return root
+
+
 func _make_ramp_grain(size: int) -> ImageTexture:
 	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
 	var rng := RandomNumberGenerator.new()
@@ -366,10 +521,13 @@ func _setup_camera() -> void:
 	cam_target = Vector3.ZERO
 	cam_yaw = 0.0
 	cam_pitch = CAM_PITCH
+	free_pos = Vector3(0.0, sin(cam_pitch), cos(cam_pitch)) * cam_dist
+	free_yaw = 0.0
+	free_pitch = -cam_pitch
 	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 	camera.fov = CAM_FOV
 	camera.near = 1.0
-	camera.far = 2000.0
+	camera.far = 4000.0
 	_update_camera()
 
 
@@ -384,10 +542,8 @@ func _update_camera() -> void:
 		follow_yaw = float(st.get("yaw", 0.0))
 		_place_follow_cam()
 	else:
-		var cp := cos(cam_pitch)
-		var offset := Vector3(sin(cam_yaw) * cp, sin(cam_pitch), cos(cam_yaw) * cp) * cam_dist
-		camera.position = cam_target + offset
-		camera.look_at(cam_target)
+		camera.position = free_pos
+		camera.rotation = Vector3(free_pitch, free_yaw, 0.0)
 
 
 func _place_follow_cam() -> void:
@@ -414,10 +570,19 @@ func _refresh_caption() -> void:
 		caption.visible = false
 
 
-func _orbit_by(rel: Vector2) -> void:
-	cam_yaw -= rel.x * ORBIT_SENS
-	cam_pitch = clampf(cam_pitch + rel.y * ORBIT_SENS, 0.15, 1.45)
-	_update_camera()
+func _free_fwd() -> Vector3:
+	return Vector3(-cos(free_pitch) * sin(free_yaw), sin(free_pitch), -cos(free_pitch) * cos(free_yaw))
+
+
+func _free_right() -> Vector3:
+	return Vector3(cos(free_yaw), 0.0, -sin(free_yaw))
+
+
+func _clamp_free_pos() -> void:
+	var lim := arena * 0.5 + 150.0
+	free_pos.x = clampf(free_pos.x, -lim, lim)
+	free_pos.z = clampf(free_pos.z, -lim, lim)
+	free_pos.y = clampf(free_pos.y, 2.0, 600.0)
 
 
 func _cycle_follow() -> void:
@@ -449,48 +614,54 @@ func _refresh_order() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and follow_idx < 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		free_yaw -= event.relative.x * LOOK_SENS
+		free_pitch = clampf(free_pitch - event.relative.y * LOOK_SENS, -1.55, 1.55)
 	if event is InputEventMouseButton and event.pressed:
+		if follow_idx < 0 and free_cursor_free and event.button_index == MOUSE_BUTTON_LEFT:
+			free_cursor_free = false
 		match event.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
-				cam_dist = clampf(cam_dist * 0.9, 60.0, 600.0)
 				if follow_idx < 0:
+					free_pos -= _free_fwd() * 40.0
+					_clamp_free_pos()
+					_update_camera()
+				else:
+					cam_dist = clampf(cam_dist * 0.9, 60.0, 600.0)
 					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
-				cam_dist = clampf(cam_dist * 1.1, 60.0, 600.0)
 				if follow_idx < 0:
+					free_pos += _free_fwd() * 40.0
+					_clamp_free_pos()
+					_update_camera()
+				else:
+					cam_dist = clampf(cam_dist * 1.1, 60.0, 600.0)
 					_update_camera()
 
 
 func _process(delta: float) -> void:
+	if follow_idx < 0 and not match_over:
+		var want := Input.MOUSE_MODE_VISIBLE if free_cursor_free else Input.MOUSE_MODE_CAPTURED
+		if Input.mouse_mode != want:
+			Input.mouse_mode = want
+	elif Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_update_agent_poses()
-	if follow_idx < 0:
-		var mp := get_viewport().get_mouse_position()
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			if have_mp:
-				_orbit_by(mp - last_mp)
-			last_mp = mp
-			have_mp = true
-		else:
-			have_mp = false
-		var fwd_g := Vector3(-sin(cam_yaw), 0, -cos(cam_yaw))
-		var right_g := Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
+	if follow_idx < 0 and not match_over:
 		var mv := Vector3.ZERO
 		if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
-			mv += fwd_g
+			mv += _free_fwd()
 		if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
-			mv -= fwd_g
+			mv -= _free_fwd()
 		if Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT):
-			mv -= right_g
+			mv -= _free_right()
 		if Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT):
-			mv += right_g
+			mv += _free_right()
 		if mv != Vector3.ZERO:
-			cam_target += mv.normalized() * cam_dist * 0.9 * delta
-			var lim := arena * 0.5 + 40.0
-			cam_target.x = clampf(cam_target.x, -lim, lim)
-			cam_target.z = clampf(cam_target.z, -lim, lim)
-			cam_target.y = 0.0
-			_update_camera()
-	else:
+			free_pos += mv.normalized() * 140.0 * delta
+		_clamp_free_pos()
+		_update_camera()
+	elif follow_idx >= 0 and not match_over:
 		var sid: int = agent_order[follow_idx] if follow_idx < agent_order.size() else -1
 		if last_pose.has(sid):
 			var dp := _display_pose(sid)
@@ -503,9 +674,13 @@ func _process(delta: float) -> void:
 	enter_was = enter_now
 	var esc_now := Input.is_physical_key_pressed(KEY_ESCAPE)
 	if esc_now and not esc_was:
-		follow_idx = -1
-		_refresh_caption()
-		_update_camera()
+		if follow_idx >= 0:
+			follow_idx = -1
+			free_cursor_free = false
+			_refresh_caption()
+			_update_camera()
+		else:
+			free_cursor_free = not free_cursor_free
 	esc_was = esc_now
 	_roll_agents(delta)
 	_squash_agents()
@@ -631,6 +806,8 @@ func _drain_lines() -> void:
 				_build_map(frame)
 			"tick":
 				_apply_tick(frame)
+			"game_over":
+				_show_game_over(frame)
 
 
 func _clear(node: Node3D) -> void:
@@ -658,6 +835,14 @@ func _build_map(frame: Dictionary) -> void:
 	arena = float(frame.get("arena_size", 200.0))
 	sphere_r = float(frame.get("sphere_radius", 1.0))
 	jump_h = float(frame.get("max_jump_height", 2.0))
+	max_ticks = int(frame.get("max_ticks", 0))
+	tick_rate = int(frame.get("tick_rate", 20))
+	match_over = false
+	if game_over_root != null:
+		game_over_root.visible = false
+	hud.visible = true
+	hint_label.visible = true
+	minimap.visible = true
 	_setup_camera()
 
 	team_mats.clear()
@@ -749,6 +934,8 @@ func _build_map(frame: Dictionary) -> void:
 
 	for f in frame.get("flags", []):
 		flag_nodes[String(f.get("team", "?"))] = _make_flag(f)
+
+	_spawn_background()
 
 	have_map = true
 
@@ -1045,6 +1232,130 @@ func _make_flag(f: Dictionary) -> Node3D:
 	return root
 
 
+func _show_game_over(frame: Dictionary) -> void:
+	match_over = true
+	hud.visible = false
+	hint_label.visible = false
+	minimap.visible = false
+	caption.visible = false
+	if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+	if game_over_layer == null:
+		game_over_layer = CanvasLayer.new()
+		game_over_layer.layer = 20
+		add_child(game_over_layer)
+		game_over_root = Control.new()
+		game_over_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+		game_over_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		game_over_layer.add_child(game_over_root)
+
+		var bg := ColorRect.new()
+		bg.color = Color(0.04, 0.04, 0.09, 0.97)
+		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		game_over_root.add_child(bg)
+
+		go_box = VBoxContainer.new()
+		go_box.set_anchors_preset(Control.PRESET_CENTER)
+		go_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		go_box.grow_vertical = Control.GROW_DIRECTION_BOTH
+		go_box.alignment = BoxContainer.ALIGNMENT_CENTER
+		go_box.add_theme_constant_override("separation", 14)
+		go_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		game_over_root.add_child(go_box)
+
+		var over := Label.new()
+		over.text = "MATCH COMPLETE"
+		var over_ls := LabelSettings.new()
+		over_ls.font_size = 28
+		over_ls.font_color = Color(0.8, 0.82, 0.95, 0.7)
+		over.label_settings = over_ls
+		over.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		go_box.add_child(over)
+
+		winner_label = Label.new()
+		go_winner_ls = LabelSettings.new()
+		go_winner_ls.font_size = 84
+		go_winner_ls.outline_size = 16
+		go_winner_ls.outline_color = Color(0.02, 0.02, 0.06, 0.95)
+		go_winner_ls.shadow_size = 18
+		go_winner_ls.shadow_color = Color(0, 0, 0, 0.55)
+		go_winner_ls.shadow_offset = Vector2(0, 6)
+		winner_label.label_settings = go_winner_ls
+		winner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		go_box.add_child(winner_label)
+
+		sub_label = Label.new()
+		var sub_ls := LabelSettings.new()
+		sub_ls.font_size = 26
+		sub_ls.font_color = Color(0.9, 0.9, 0.98, 0.85)
+		sub_label.label_settings = sub_ls
+		sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		go_box.add_child(sub_label)
+
+		var divider := ColorRect.new()
+		divider.custom_minimum_size = Vector2(340, 2)
+		divider.color = Color(1, 1, 1, 0.18)
+		divider.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		go_box.add_child(divider)
+
+		score_box = VBoxContainer.new()
+		score_box.alignment = BoxContainer.ALIGNMENT_CENTER
+		score_box.add_theme_constant_override("separation", 6)
+		go_box.add_child(score_box)
+
+		foot_label = Label.new()
+		var foot_ls := LabelSettings.new()
+		foot_ls.font_size = 16
+		foot_ls.font_color = Color(1, 1, 1, 0.45)
+		foot_label.label_settings = foot_ls
+		foot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		go_box.add_child(foot_label)
+
+	var winner_raw = frame.get("winner")
+	var winner := String(winner_raw) if typeof(winner_raw) == TYPE_STRING else ""
+	if winner != "":
+		winner_label.text = winner.to_upper()
+		go_winner_ls.font_color = team_colors.get(winner, Color.WHITE)
+		sub_label.text = "WINS THE MATCH"
+	else:
+		winner_label.text = "DRAW"
+		go_winner_ls.font_color = Color(0.92, 0.92, 0.98)
+		sub_label.text = "A stalemate."
+
+	for child in score_box.get_children():
+		score_box.remove_child(child)
+		child.queue_free()
+	var sc: Dictionary = frame.get("score", {})
+	var entries: Array = []
+	for k in sc.keys():
+		entries.append([String(k), int(sc[k])])
+	entries.sort_custom(func(a, b): return a[1] > b[1])
+	for e in entries:
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 12)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(14, 14)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sw.color = team_colors.get(e[0], Color.WHITE)
+		row.add_child(sw)
+		var lbl := Label.new()
+		lbl.text = "%s    %d" % [e[0].to_upper(), e[1]]
+		var ls := LabelSettings.new()
+		ls.font_size = 22
+		ls.font_color = Color(0.95, 0.95, 1.0, 0.9)
+		lbl.label_settings = ls
+		row.add_child(lbl)
+		score_box.add_child(row)
+
+	game_over_root.visible = true
+	game_over_root.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(game_over_root, "modulate:a", 1.0, 0.6)
+
+
 func _apply_tick(frame: Dictionary) -> void:
 	if not have_map:
 		return
@@ -1117,4 +1428,8 @@ func _apply_tick(frame: Dictionary) -> void:
 	for k in order:
 		parts.append("%s %d" % [String(k).to_upper(), int(sc[k])])
 	var score_txt := " · ".join(parts) if not parts.is_empty() else "-"
-	hud.text = "tick %d   %s   orb (%.2f, %.2f) mb%d" % [tick, score_txt, cam_yaw, cam_pitch, int(Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT))]
+	var time_txt := "tick %d" % tick
+	if max_ticks > 0:
+		var remain_s := maxi(0, int(ceil(float(max_ticks - tick) / float(tick_rate))))
+		time_txt = "%d:%02d left" % [int(remain_s / 60.0), remain_s % 60]
+	hud.text = "%s   %s" % [time_txt, score_txt]

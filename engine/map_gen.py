@@ -238,7 +238,7 @@ def _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng, placed_
     width = min(rng.uniform(RAMP_WIDTH_MIN, RAMP_WIDTH_MAX), elen)
     dx, dy = -nx, -ny
 
-    hx, hy = mx + nx * RAMP_OVERLAP, my + ny * RAMP_OVERLAP
+    hx, hy = mx - nx * RAMP_OVERLAP, my - ny * RAMP_OVERLAP
     cx, cy = hx - dx * length / 2.0, hy - dy * length / 2.0
     lx, ly = hx - dx * length, hy - dy * length
 

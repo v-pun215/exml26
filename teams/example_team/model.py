@@ -105,7 +105,7 @@ def decide(observation):
         print(f"[{team} tick={tick}] SCORED! {score}", flush=True)
     _last_score = score.get(team, 0)
 
-    inbox = observation.get("sonar_receive", observation.get("sonar_recieve", [])) or []
+    inbox = observation.get("sonar_receive", []) or []
     for m in inbox:
         v = m.get("value") if isinstance(m, dict) else None
         if isinstance(v, dict) and v.get("kind") == "has-flag":

@@ -87,7 +87,6 @@ class Game:
                 "teammates": [s.to_state_dict() for s in team_spheres if s.id != sphere.id],
                 "score": dict(self.score),
                 "sonar_receive": sonars,
-                "sonar_recieve": sonars,
                 "death_messages": deaths,
             }
             actions[sphere.id] = worker.get_action(observation, RPC_TIMEOUT_S)

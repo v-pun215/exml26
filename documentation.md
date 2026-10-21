@@ -60,7 +60,6 @@ is approximately `±99`.
     "teammates": [sphere_state],         # living teammates except self
     "score": {"red": 0, "blue": 1},     # score for every team
     "sonar_receive": [sonar_message],    # teammate messages heard this tick
-    "sonar_recieve": [sonar_message],    # legacy misspelling; same data
     "death_messages": [death_message],   # recent deaths of your team
 }
 ```
@@ -121,7 +120,6 @@ teammates within 10 units with unobstructed line of sight. Recipients see:
 
 Messages are based on the previous tick's sent values: do not expect a
 same-tick reply. Set the fourth return item to `None` to stop broadcasting.
-Prefer `sonar_receive`; `sonar_recieve` is retained only for compatibility.
 
 ### `death_message`
 

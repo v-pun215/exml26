@@ -1,2 +1,2 @@
 def decide(observation):
-    return 0.0, 0.0, False
+    return 0.0, 0.0, False, None

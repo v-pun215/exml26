@@ -1,6 +1,5 @@
 import math
 import time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 from engine.constants import ARENA_SIZE, RESPAWN_DELAY_TICKS, RPC_TIMEOUT_S, TICK_DT
@@ -55,10 +54,11 @@ class Game:
         self.clients = {}
         sphere_id = 0
         for team, (hx, hy) in zip(teams, homes):
-            self.clients[team["name"]] = ModelWorker(team["name"], team["model_path"])
             for i in range(spheres_per_team):
                 offset = (i - spheres_per_team / 2.0) * 3.0
-                self.spheres.append(Sphere(sphere_id, team["name"], hx + offset, hy, player=i + 1))
+                sphere = Sphere(sphere_id, team["name"], hx + offset, hy, player=i + 1)
+                self.spheres.append(sphere)
+                self.clients[sphere.id] = ModelWorker(team["name"], team["model_path"])
                 sphere_id += 1
 
         self.flags = [Flag(team["name"], hx, hy) for team, (hx, hy) in zip(teams, homes)]
@@ -66,60 +66,47 @@ class Game:
         self.ramps = generate_ramps(self.obstacles, homes, seed=seed)
         self.telemetry = TelemetryRecorder()
         self.telemetry.record_map(self.obstacles, self.flags, self.teams, self.max_ticks, self.ramps)
-        self._pool = ThreadPoolExecutor(max_workers=max(4, len(teams)))
+        self._pool = ThreadPoolExecutor(max_workers=max(4, len(self.spheres)))
         self._respawn_at = {}
         self._last_sonar = {}
         self._death_log = []
 
-    def _collect_team_actions(self, team_name, team_spheres, all_alive, own_flag_state, other_flags_state):
-        worker = self.clients[team_name]
-        actions = {}
-        for sphere in team_spheres:
-            enemies = visible_enemies(sphere, all_alive, self.obstacles)
-            sonars = audible_sonars(sphere, all_alive, self._last_sonar, self.obstacles)
-            deaths = [m for m in self._death_log if m["team"] == sphere.team]
-            observation = {
-                "tick": self.tick,
-                "self": sphere.to_state_dict(),
-                "visible_enemies": enemies,
-                "own_flag": own_flag_state,
-                "other_flags": other_flags_state,
-                "teammates": [s.to_state_dict() for s in team_spheres if s.id != sphere.id],
-                "score": dict(self.score),
-                "sonar_receive": sonars,
-                "death_messages": deaths,
-            }
-            actions[sphere.id] = worker.get_action(observation, RPC_TIMEOUT_S)
-        return actions
+    def _get_sphere_action(self, sphere, all_alive, own_flag_state, other_flags_state):
+        observation = {
+            "tick": self.tick,
+            "self": sphere.to_state_dict(),
+            "visible_enemies": visible_enemies(sphere, all_alive, self.obstacles),
+            "own_flag": own_flag_state,
+            "other_flags": other_flags_state,
+            "score": dict(self.score),
+            "sonar_receive": audible_sonars(
+                sphere, all_alive, self._last_sonar, self.obstacles),
+            "death_messages": [m for m in self._death_log if m["team"] == sphere.team],
+        }
+        return sphere.id, self.clients[sphere.id].get_action(observation, RPC_TIMEOUT_S)
 
     def step(self):
         alive_spheres = [s for s in self.spheres if s.alive]
         flag_by_team = {f.team: f for f in self.flags}
 
-        by_team = defaultdict(list)
-        for sphere in alive_spheres:
-            by_team[sphere.team].append(sphere)
-
-        futures = {
-            team_name: self._pool.submit(
-                self._collect_team_actions,
-                team_name,
-                team_spheres,
+        futures = [
+            self._pool.submit(
+                self._get_sphere_action,
+                sphere,
                 alive_spheres,
-                flag_by_team[team_name].to_state_dict(),
-                [f.to_state_dict() for f in self.flags if f.team != team_name],
+                flag_by_team[sphere.team].to_state_dict(),
+                [f.to_state_dict() for f in self.flags if f.team != sphere.team],
             )
-            for team_name, team_spheres in by_team.items()
-        }
-        for team_name, future in futures.items():
-            actions = future.result()
-            for sphere in by_team[team_name]:
-                throttle, turn, jump, sonar_val = _normalize_action(actions.get(sphere.id))
-                sphere.apply_action(throttle, turn, jump, sonar_val)
-                if sonar_val is not None:
-                    self._last_sonar[sphere.id] = sonar_val
-                elif sphere.id in self._last_sonar:
-                    del self._last_sonar[sphere.id]
+            for sphere in alive_spheres
+        ]
+        actions = dict(future.result() for future in futures)
+        for sphere in alive_spheres:
+            throttle, turn, jump, sonar_val = _normalize_action(actions.get(sphere.id))
+            sphere.apply_action(throttle, turn, jump, sonar_val)
+            if sonar_val is not None:
+                self._last_sonar[sphere.id] = sonar_val
+            elif sphere.id in self._last_sonar:
+                del self._last_sonar[sphere.id]
 
         for sphere in self.spheres:
             sphere.integrate(TICK_DT)

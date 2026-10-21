@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_disabled;
+render_mode cull_disabled, diffuse_toon, specular_toon;
 
 uniform float flash_period : hint_range(1.0, 30.0) = 7.0;
 uniform float flash_amount : hint_range(0.0, 1.0) = 0.28;
@@ -18,4 +18,6 @@ void fragment() {
 	ALBEDO = mix(base, lit, pulse);
 	ROUGHNESS = 0.92;
 	METALLIC = 0.0;
+	RIM = 0.10;
+	RIM_TINT = 0.45;
 }

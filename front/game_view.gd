@@ -71,14 +71,15 @@ var minimap: Control
 var mini_obstacles := []
 var mini_ramps := []
 var mini_flags := {}
-var obstacle_mat: StandardMaterial3D
+var obstacle_mat: ShaderMaterial
 var ground_mat: ShaderMaterial
-var ramp_top_mat: StandardMaterial3D
-var ramp_side_mat: StandardMaterial3D
-var pole_mat: StandardMaterial3D
+var ramp_top_mat: ShaderMaterial
+var ramp_side_mat: ShaderMaterial
+var pole_mat: ShaderMaterial
 var ramp_grain_tex: ImageTexture
 var aurora_curtain_shader: Shader
 var map_glow_shader: Shader
+var toon_shader: Shader
 
 var agent_grounded := {}
 var agent_carrying := {}
@@ -165,44 +166,17 @@ func _ready() -> void:
 	layer.add_child(minimap)
 
 
-	obstacle_mat = StandardMaterial3D.new()
-	obstacle_mat.albedo_color = Color(0.5, 0.45, 0.36)
-	obstacle_mat.metallic = 0.0
-	obstacle_mat.roughness = 0.9
-	obstacle_mat.emission_enabled = false
-	obstacle_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	toon_shader = load("res://toon.gdshader")
+	obstacle_mat = _toon_material(Color(0.50, 0.45, 0.36), 0.92, 0.12)
 
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = load("res://ground_facets.gdshader")
 
 	ramp_grain_tex = _make_ramp_grain(64)
 
-	ramp_top_mat = StandardMaterial3D.new()
-	ramp_top_mat.albedo_color = Color(0.69, 0.50, 0.32)
-	ramp_top_mat.albedo_texture = ramp_grain_tex
-	ramp_top_mat.metallic = 0.0
-	ramp_top_mat.roughness = 0.65
-	ramp_top_mat.uv1_scale = Vector3(0.3, 0.3, 1.0)
-	ramp_top_mat.emission_enabled = true
-	ramp_top_mat.emission = Color(0.69, 0.50, 0.32)
-	ramp_top_mat.emission_energy_multiplier = 0.4
-	ramp_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	ramp_side_mat = StandardMaterial3D.new()
-	ramp_side_mat.albedo_color = Color(0.33, 0.22, 0.14)
-	ramp_side_mat.albedo_texture = ramp_grain_tex
-	ramp_side_mat.metallic = 0.0
-	ramp_side_mat.roughness = 0.9
-	ramp_side_mat.uv1_scale = Vector3(0.3, 0.3, 1.0)
-	ramp_side_mat.emission_enabled = true
-	ramp_side_mat.emission = Color(0.33, 0.22, 0.14)
-	ramp_side_mat.emission_energy_multiplier = 0.3
-	ramp_side_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	pole_mat = StandardMaterial3D.new()
-	pole_mat.albedo_color = Color(0.4, 0.36, 0.3)
-	pole_mat.metallic = 0.0
-	pole_mat.roughness = 0.7
+	ramp_top_mat = _toon_material(Color(0.69, 0.50, 0.32), 0.65, 0.16, Color(0.69, 0.50, 0.32), 0.22)
+	ramp_side_mat = _toon_material(Color(0.33, 0.22, 0.14), 0.88, 0.10, Color(0.33, 0.22, 0.14), 0.12)
+	pole_mat = _toon_material(Color(0.40, 0.36, 0.30), 0.72, 0.12)
 
 	_setup_audio()
 	tcp.connect_to_host(host, port)
@@ -262,14 +236,21 @@ func _draw_minimap() -> void:
 		minimap.draw_circle(sp, 4.0, col)
 
 
+func _toon_material(color: Color, material_roughness := 0.72, rim := 0.16,
+		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = toon_shader
+	mat.set_shader_parameter("base_color", color)
+	mat.set_shader_parameter("roughness", material_roughness)
+	mat.set_shader_parameter("rim_strength", rim)
+	mat.set_shader_parameter("emission_color", emission)
+	mat.set_shader_parameter("emission_strength", emission_strength)
+	mat.set_shader_parameter("use_vertex_color", vertex_color)
+	return mat
+
+
 func _spawn_clouds() -> void:
-	var cloud_mat := StandardMaterial3D.new()
-	cloud_mat.albedo_color = Color(0.95, 0.93, 0.9)
-	cloud_mat.metallic = 0.0
-	cloud_mat.roughness = 1.0
-	cloud_mat.emission_enabled = true
-	cloud_mat.emission = Color(0.95, 0.93, 0.9)
-	cloud_mat.emission_energy_multiplier = 0.3
+	var cloud_mat := _toon_material(Color(0.95, 0.93, 0.90), 1.0, 0.08, Color(0.95, 0.93, 0.90), 0.16)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5
@@ -396,31 +377,22 @@ func _spawn_background() -> void:
 			else:
 				_add_bg_facet(st, p00, p10, p01, base)
 				_add_bg_facet(st, p10, p11, p01, base)
-	var terrain_mat := StandardMaterial3D.new()
-	terrain_mat.vertex_color_use_as_albedo = true
-	terrain_mat.roughness = 1.0
-	terrain_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var terrain_mat := _toon_material(Color.WHITE, 1.0, 0.08, Color(0.08, 0.13, 0.08), 0.05, true)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = terrain_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	bg_root.add_child(mi)
 
-	var trunk_mat := StandardMaterial3D.new()
-	trunk_mat.albedo_color = Color(0.32, 0.22, 0.14)
-	trunk_mat.roughness = 0.95
-	var canopy_a := StandardMaterial3D.new()
-	canopy_a.albedo_color = Color(0.16, 0.38, 0.16)
-	canopy_a.roughness = 0.9
-	var canopy_b := StandardMaterial3D.new()
-	canopy_b.albedo_color = Color(0.24, 0.5, 0.2)
-	canopy_b.roughness = 0.9
+	var trunk_mat := _toon_material(Color(0.32, 0.22, 0.14), 0.95, 0.10)
+	var canopy_a := _toon_material(Color(0.16, 0.38, 0.16), 0.9, 0.18)
+	var canopy_b := _toon_material(Color(0.24, 0.50, 0.20), 0.9, 0.18)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 71
 	var placed := 0
 	var attempts := 0
-	while placed < 260 and attempts < 3000:
+	while placed < 620 and attempts < 7000:
 		attempts += 1
 		var ang := rng.randf() * TAU
 		var dist := rng.randf_range(flat_r + 20.0, span_r * 0.92)
@@ -435,7 +407,7 @@ func _spawn_background() -> void:
 
 
 func _make_tree(rng: RandomNumberGenerator, x: float, z: float, ground_h: float,
-		trunk_mat: StandardMaterial3D, canopy_mat: StandardMaterial3D) -> Node3D:
+		trunk_mat: Material, canopy_mat: Material) -> Node3D:
 	var root := Node3D.new()
 	root.position = Vector3(x, ground_h - 0.4, z)
 	root.rotation.y = rng.randf() * TAU
@@ -727,7 +699,7 @@ func _update_agent_poses() -> void:
 		if last_info.has(sid) and agent_mats.has(sid):
 			var team := String((last_info[sid] as Dictionary).get("team", "?"))
 			var base: Color = team_colors.get(team, Color(1, 1, 1))
-			(agent_mats[sid] as StandardMaterial3D).albedo_color = base.lerp(Color(1, 1, 1), hfrac * 0.85)
+			(agent_mats[sid] as ShaderMaterial).set_shader_parameter("base_color", base.lerp(Color(1, 1, 1), hfrac * 0.85))
 
 
 func _squash_agents() -> void:
@@ -854,10 +826,7 @@ func _build_map(frame: Dictionary) -> void:
 	for t in frame.get("teams", []):
 		var base := Color(String(t.get("color", "#ffffff")))
 		team_colors[String(t.get("name", "?"))] = base
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = base
-		mat.emission_enabled = false
-		mat.roughness = 0.55
+		var mat := _toon_material(base, 0.55, 0.20)
 		team_mats[String(t.get("name", "?"))] = mat
 
 	var half := arena * 0.5
@@ -883,10 +852,7 @@ func _build_map(frame: Dictionary) -> void:
 	glow_plane_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	map_root.add_child(glow_plane_mi)
 
-	var border_mat := StandardMaterial3D.new()
-	border_mat.albedo_color = Color(0.4, 0.37, 0.48)
-	border_mat.metallic = 0.0
-	border_mat.roughness = 0.9
+	var border_mat := _toon_material(Color(0.40, 0.37, 0.48), 0.9, 0.15)
 	for spec in [
 		[Vector3(0, 1, -half), Vector3(arena + 2.0, 2.0, 1.0)],
 		[Vector3(0, 1, half), Vector3(arena + 2.0, 2.0, 1.0)],
@@ -1155,14 +1121,7 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	sm.radial_segments = 24
 	sm.rings = 16
 	mi.mesh = sm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = team_colors.get(team, Color(1, 1, 1))
-	mat.metallic = 0.05
-	mat.roughness = 0.4
-	mat.rim_enabled = true
-	mat.rim = 0.35
-	mat.rim_tint = 0.5
-	mat.emission_enabled = false
+	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.4, 0.35)
 	mi.material_override = mat
 	agent_mats[sid] = mat
 	agent_meshes[sid] = mi
@@ -1172,11 +1131,7 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	indicator.position = Vector3(0, sphere_r * 1.9, 0)
 	indicator.visible = false
 
-	var ind_mat := StandardMaterial3D.new()
-	ind_mat.metallic = 0.0
-	ind_mat.roughness = 0.6
-	ind_mat.emission_enabled = true
-	ind_mat.emission_energy_multiplier = 0.35
+	var ind_mat := _toon_material(Color.WHITE, 0.6, 0.2, Color.WHITE, 0.35)
 	var ind_chip := MeshInstance3D.new()
 	var ind_chip_mesh := BoxMesh.new()
 	ind_chip_mesh.size = Vector3(0.22, 0.22, 0.04)
@@ -1407,9 +1362,9 @@ func _apply_tick(frame: Dictionary) -> void:
 			ind_root.visible = carrying != null
 			if carrying != null:
 				var carry_color: Color = team_colors.get(String(carrying), Color(1, 1, 1))
-				var ind_mat := indicator["mat"] as StandardMaterial3D
-				ind_mat.albedo_color = carry_color
-				ind_mat.emission = carry_color
+				var ind_mat := indicator["mat"] as ShaderMaterial
+				ind_mat.set_shader_parameter("base_color", carry_color)
+				ind_mat.set_shader_parameter("emission_color", carry_color)
 	_refresh_order()
 	_refresh_caption()
 	for f in frame.get("flags", []):

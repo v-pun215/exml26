@@ -125,6 +125,10 @@ func _ready() -> void:
 			capture_portrait = true
 		elif arg.begins_with("--expr="):
 			capture_expr = arg.substr(7)
+		elif arg.begins_with("--port="):
+			port = arg.substr(7).to_int()
+		elif arg.begins_with("--host="):
+			host = arg.substr(7)
 		elif arg.begins_with("--capture="):
 			capture_path = arg.substr(10)
 			capture_countdown = 420

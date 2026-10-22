@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import json
 import os
@@ -127,7 +125,7 @@ def _serve_replay(args):
     server.listen(1)
     try:
         while True:
-            print("bridge: waiting for Godot client...")
+            print("bridge: waiting for Godot client")
             conn, addr = server.accept()
             print(f"bridge: Godot connected from {addr}")
             try:

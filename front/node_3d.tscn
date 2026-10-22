@@ -47,4 +47,4 @@ transform = Transform3D(1, 0, 0, 0, 0.017895892, 0.99983984, 0, -0.99983984, 0.0
 environment = SubResource("Environment_njevn")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1347409490]
-transform = Transform3D(1, 0, 0, 0, 0.017895892, 0.99983984, 0, -0.99983984, 0.017895892, 0, 0, 0)
+transform = Transform3D(1, 0, 0, 0, 0.5154183, 0.85693884, 0, -0.85693884, 0.5154183, 0, 0, 0)

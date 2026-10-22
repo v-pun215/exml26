@@ -968,16 +968,24 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 	var squint_t := 0.0
 	var smile_t := 0.2
 	var open_t := 0.0
+	var brow_raise := 0.0
+	var brow_tilt := -0.06
 	if airborne:
 		wide_t = 1.0
 		smile_t = -0.5
 		open_t = 0.5
+		brow_raise = 0.42
+		brow_tilt = -0.22
 	elif carrying or celebrate > 0.0:
 		happy_t = 1.0
 		smile_t = 1.0
+		brow_raise = 0.30
+		brow_tilt = -0.30
 	elif fast:
 		squint_t = 0.6
 		smile_t = 0.6
+		brow_raise = -0.04
+		brow_tilt = 0.28
 	else:
 		squint_t = 0.45
 		smile_t = 0.45
@@ -988,10 +996,14 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 		squint_t = 0.0
 		smile_t = 0.18
 		open_t = 0.0
+		brow_raise = 0.0
+		brow_tilt = -0.06
 		match capture_expr:
 			"happy":
 				happy_t = 1.0
 				smile_t = 1.0
+				brow_raise = 0.30
+				brow_tilt = -0.30
 			"wide":
 				wide_t = 1.0
 				smile_t = -0.85
@@ -1099,6 +1111,8 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 	state["look"] = look
 
 	face_mat.set_shader_parameter("look_offset", look)
+	face_mat.set_shader_parameter("brow_raise", brow_raise)
+	face_mat.set_shader_parameter("brow_tilt", brow_tilt)
 	face_mat.set_shader_parameter("blink", blink)
 	face_mat.set_shader_parameter("wink", wink)
 	face_mat.set_shader_parameter("wink_side", wink_side)

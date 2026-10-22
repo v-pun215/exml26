@@ -15,9 +15,20 @@ uniform float smile = 0.0;
 uniform float mouth_open = 0.0;
 uniform float glint_amount = 1.0;
 uniform float lash_amount : hint_range(0.0, 2.0) = 1.0;
+uniform float brow_amount : hint_range(0.0, 2.0) = 1.0;
+uniform float brow_raise = 0.0;
+uniform float brow_tilt = 0.0;
 
 float cover(float d) {
 	return 1.0 - smoothstep(-0.009, 0.009, d);
+}
+
+float sd_tapered_segment(vec2 p, vec2 a, vec2 b, float wa, float wb) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
+	float w = mix(wa, wb, h);
+	return length(pa - ba * h) - w;
 }
 
 float eye_dot(vec2 e, float r, float squash_y) {
@@ -53,6 +64,13 @@ float flick_lash(vec2 eq, float r, float side) {
 	return max(a, b);
 }
 
+float brow_stroke(vec2 e, float r, float side) {
+	float y = r * (1.66 + brow_raise);
+	vec2 outer_p = vec2(side * 1.0 * r, y + brow_tilt * 1.0 * r);
+	vec2 inner_p = vec2(-side * 1.0 * r, y - brow_tilt * 1.0 * r);
+	return sd_tapered_segment(e, inner_p, outer_p, 0.16 * r, 0.24 * r);
+}
+
 void fragment() {
 	vec2 p = (UV - 0.5) * 2.0;
 
@@ -73,6 +91,8 @@ void fragment() {
 
 	vec2 e0 = p - vec2(-0.40, 0.26) - off;
 	vec2 e1 = p - vec2(0.40, 0.26) - off;
+	vec2 bp0 = p - vec2(-0.40, 0.26);
+	vec2 bp1 = p - vec2(0.40, 0.26);
 
 	float d0 = mix(eye_dot(e0, r, sy0), eye_arc(e0), happy);
 	float d1 = mix(eye_dot(e1, r, sy1), eye_arc(e1), happy);
@@ -82,6 +102,7 @@ void fragment() {
 	vec2 eq1 = vec2(e1.x, e1.y / max(sy1, 0.02));
 	float lash = max(lid_lash(eq0, r, -1.0), lid_lash(eq1, r, 1.0));
 	float flick = max(flick_lash(eq0, r, -1.0), flick_lash(eq1, r, 1.0));
+	float brow = max(cover(brow_stroke(bp0, r, -1.0)), cover(brow_stroke(bp1, r, 1.0)));
 
 	vec2 m = p - vec2(0.0, -0.30);
 	float curve = m.y - (smile * 1.9 * m.x * m.x);
@@ -96,6 +117,10 @@ void fragment() {
 	float lash_a = max(lash, flick) * lash_amount * lash_color.a;
 	col = mix(col, lash_color.rgb, lash_a);
 	alpha = max(alpha, lash_a);
+
+	float brow_a = brow * brow_amount * lash_color.a;
+	col = mix(col, lash_color.rgb, brow_a);
+	alpha = max(alpha, brow_a);
 
 	float eye_a = cover(d_eye) * dot_color.a;
 	col = mix(col, dot_color.rgb, eye_a);

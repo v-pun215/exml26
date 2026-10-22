@@ -5,6 +5,8 @@ uniform vec4 dot_color : source_color = vec4(0.06, 0.05, 0.12, 1.0);
 uniform vec4 glint_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec2 look_offset = vec2(0.0);
 uniform float blink = 0.0;
+uniform float wink = 0.0;
+uniform float wink_side = -1.0;
 uniform float happy = 0.0;
 uniform float wide = 0.0;
 uniform float squint = 0.0;
@@ -29,14 +31,25 @@ void fragment() {
 	vec2 p = (UV - 0.5) * 2.0;
 
 	float r = 0.17 * (1.0 + wide * 0.42);
-	float squash_y = 1.0 - squint * 0.55 - blink * 0.93;
 	vec2 off = look_offset * 0.09;
+
+	float b0 = blink;
+	float b1 = blink;
+	if (wink_side >= 0.0) {
+		if (wink_side < 0.5) {
+			b0 = max(b0, wink);
+		} else {
+			b1 = max(b1, wink);
+		}
+	}
+	float sy0 = 1.0 - squint * 0.55 - b0 * 0.93;
+	float sy1 = 1.0 - squint * 0.55 - b1 * 0.93;
 
 	vec2 e0 = p - vec2(-0.42, 0.30) - off;
 	vec2 e1 = p - vec2(0.42, 0.30) - off;
 
-	float d0 = mix(eye_dot(e0, r, squash_y), eye_arc(e0), happy);
-	float d1 = mix(eye_dot(e1, r, squash_y), eye_arc(e1), happy);
+	float d0 = mix(eye_dot(e0, r, sy0), eye_arc(e0), happy);
+	float d1 = mix(eye_dot(e1, r, sy1), eye_arc(e1), happy);
 	float d_eye = min(d0, d1);
 
 	vec2 m = p - vec2(0.0, -0.26);
@@ -56,7 +69,7 @@ void fragment() {
 	vec2 g0 = e0 - vec2(-0.052, 0.058);
 	vec2 g1 = e1 - vec2(-0.052, 0.058);
 	float g_a = cover(min(length(g0), length(g1)) - 0.029)
-		* (1.0 - happy) * (1.0 - blink) * glint_amount * glint_color.a;
+		* (1.0 - happy) * (1.0 - b0) * (1.0 - b1) * glint_amount * glint_color.a;
 	col = mix(col, glint_color.rgb, g_a);
 	alpha = max(alpha, g_a);
 

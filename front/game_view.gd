@@ -941,20 +941,33 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 	if face_mat == null:
 		return
 
-	var carrying := agent_carrying.has(sid)
+	var carrying := agent_carrying.get(sid, null) != null
 	var team := String(last_info[sid].get("team", "")) if last_info.has(sid) else ""
-	var falling := air > 0.12 and v.y < -5.0
+	var airborne := air > 0.08
+	var fast := sp > 10.0
+	var celebrate: float = state.get("celebrate", 0.0)
+	if celebrate > 0.0:
+		celebrate = maxf(0.0, celebrate - delta)
+		state["celebrate"] = celebrate
 
-	var happy_t := 1.0 if carrying else 0.0
-	var wide_t := 1.0 if falling else 0.0
-	var squint_t := 0.32 if (sp < 1.5 and not carrying) else 0.0
-	var smile_t := 0.18
+	var happy_t := 0.0
+	var wide_t := 0.0
+	var squint_t := 0.0
+	var smile_t := 0.2
 	var open_t := 0.0
-	if carrying:
+	if airborne:
+		wide_t = 1.0
+		smile_t = -0.5
+		open_t = 0.5
+	elif carrying or celebrate > 0.0:
+		happy_t = 1.0
 		smile_t = 1.0
-	elif falling:
-		smile_t = -0.85
-		open_t = 0.55
+	elif fast:
+		squint_t = 0.6
+		smile_t = 0.6
+	else:
+		squint_t = 0.45
+		smile_t = 0.45
 
 	if capture_expr != "":
 		happy_t = 0.0
@@ -980,13 +993,13 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 	var phase: float = state["blink_phase"]
 	var timer: float = state["blink_t"] - delta
 	if timer <= 0.0:
-		timer = randf_range(2.4, 6.5)
+		timer = randf_range(1.8, 4.5)
 		phase = 0.0
 		state["double"] = randf() < 0.22
 	state["blink_t"] = timer
 	if phase >= 0.0:
 		phase += delta
-		var dur := 0.14
+		var dur := 0.18
 		if phase < dur * 0.35:
 			blink = phase / (dur * 0.35)
 		elif phase < dur * 0.6:
@@ -1004,6 +1017,36 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 	state["blink"] = blink
 	if capture_expr == "blink":
 		blink = 1.0
+
+	var wink_t: float = state.get("wink_t", 0.0) - delta
+	var wink: float = 0.0
+	var wink_side: float = -1.0
+	if wink_t <= 0.0:
+		wink_t = randf_range(3.0, 9.0)
+		state["wink_phase"] = -1.0
+		state["wink_side"] = -1.0
+	state["wink_t"] = wink_t
+	var wphase: float = state.get("wink_phase", -1.0)
+	if wphase < 0.0 and randf() < delta * 0.15:
+		wphase = 0.0
+		state["wink_side"] = 0.0 if randf() < 0.5 else 1.0
+	if wphase >= 0.0:
+		wphase += delta
+		var wdur := 0.16
+		if wphase < wdur * 0.35:
+			wink = wphase / (wdur * 0.35)
+		elif wphase < wdur * 0.6:
+			wink = 1.0
+		else:
+			wink = clampf(1.0 - (wphase - wdur * 0.6) / (wdur * 0.4), 0.0, 1.0)
+		if wphase >= wdur:
+			wphase = -1.0
+			wink = 0.0
+			state["wink_side"] = -1.0
+	state["wink_phase"] = wphase
+	state["wink"] = wink
+	wink_side = state.get("wink_side", -1.0)
+	state["wink_side"] = wink_side
 
 	var happy: float = state["happy"]
 	happy = lerpf(happy, happy_t, clampf(delta * 6.0, 0.0, 1.0))
@@ -1044,6 +1087,8 @@ func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Nod
 
 	face_mat.set_shader_parameter("look_offset", look)
 	face_mat.set_shader_parameter("blink", blink)
+	face_mat.set_shader_parameter("wink", wink)
+	face_mat.set_shader_parameter("wink_side", wink_side)
 	face_mat.set_shader_parameter("happy", happy)
 	face_mat.set_shader_parameter("wide", wide)
 	face_mat.set_shader_parameter("squint", squint)
@@ -1058,6 +1103,12 @@ func _trigger_ring(sid: int, pos: Vector3) -> void:
 	var r_node := rings["node"] as MeshInstance3D
 	r_node.global_position = Vector3(pos.x, 0.06, pos.z)
 	agent_states[sid]["ring_t"] = 0.35
+
+
+func _celebrate_team(team: String) -> void:
+	for sid in agent_states.keys():
+		if String(last_info.get(sid, {}).get("team", "")) == team:
+			agent_states[sid]["celebrate"] = 1.8
 
 
 func _other_team(team: String) -> String:
@@ -1570,7 +1621,9 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 		"blink_t": randf_range(0.6, 4.0), "double": false, "happy": 0.0,
 		"wide": 0.0, "squint": 0.0, "smile": 0.18, "mouth_open": 0.0,
 		"look": Vector2.ZERO, "ring_t": 0.0, "contact_t": 0.0,
-		"vel_prev": Vector3.ZERO, "accel": Vector3.ZERO}
+		"vel_prev": Vector3.ZERO, "accel": Vector3.ZERO, "celebrate": 0.0,
+		"wink": 0.0, "wink_side": -1.0, "wink_t": randf_range(1.0, 6.0),
+		"wink_phase": -1.0}
 	return root
 
 
@@ -1850,6 +1903,7 @@ func _apply_tick(frame: Dictionary) -> void:
 	for k in sc.keys():
 		if int(sc[k]) > int(last_score.get(k, 0)):
 			score_player.play()
+			_celebrate_team(String(k))
 		last_score[k] = int(sc[k])
 	var order: Array = sc.keys()
 	order.sort()

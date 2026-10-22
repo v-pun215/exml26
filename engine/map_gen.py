@@ -25,7 +25,41 @@ from engine.geometry import (
     point_in_polygon,
     polygon_bounding_radius,
     polygon_centroid,
+    segments_intersect,
 )
+
+
+def _rect_edges(corners):
+    return [(corners[i], corners[(i + 1) % 4]) for i in range(4)]
+
+
+def _rects_overlap(a, b):
+    for px, py in a:
+        if point_in_polygon(px, py, b):
+            return True
+    for px, py in b:
+        if point_in_polygon(px, py, a):
+            return True
+    for p1, p2 in _rect_edges(a):
+        for p3, p4 in _rect_edges(b):
+            if segments_intersect(p1, p2, p3, p4):
+                return True
+    return False
+
+
+def _rect_hits_obstacle(corners, obstacles, target):
+    for ob in obstacles:
+        if ob is target:
+            continue
+        for px, py in corners:
+            if point_in_polygon(px, py, ob.points):
+                return True
+        for p1, p2 in _rect_edges(corners):
+            n = len(ob.points)
+            for i in range(n):
+                if segments_intersect(p1, p2, ob.points[i], ob.points[(i + 1) % n]):
+                    return True
+    return False
 
 
 class Obstacle:
@@ -140,7 +174,7 @@ def generate_map(spawn_points, seed=None):
     return obstacles
 
 
-def _ramp_fits(low_point, high_point, corners, obstacles, target, exclusion_zones):
+def _ramp_fits(low_point, high_point, corners, obstacles, target, exclusion_zones, placed_ramps=()):
     half = ARENA_SIZE / 2.0 - 1.0
     for px, py in corners:
         if abs(px) > half or abs(py) > half:
@@ -155,6 +189,16 @@ def _ramp_fits(low_point, high_point, corners, obstacles, target, exclusion_zone
             return False
         dist_low, _ = closest_point_on_polygon(low_point[0], low_point[1], ob.points)
         if dist_low < 0.5:
+            return False
+        dist_high, _ = closest_point_on_polygon(high_point[0], high_point[1], ob.points)
+        if dist_high < 0.5:
+            return False
+
+    if _rect_hits_obstacle(corners, obstacles, target):
+        return False
+
+    for other in placed_ramps:
+        if _rects_overlap(corners, other.corners()):
             return False
 
     for ex, ey, eradius in exclusion_zones:
@@ -184,7 +228,7 @@ def _angle_gap(angle_a, angle_b):
     return gap - 2 * math.pi if gap > math.pi else gap
 
 
-def _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng):
+def _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng, placed_ramps=()):
     normal = _edge_outward_normal(ob, edge_index)
     if normal is None:
         return None
@@ -199,7 +243,7 @@ def _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng):
     lx, ly = hx - dx * length, hy - dy * length
 
     candidate = Ramp(cx, cy, dx, dy, length, width, ob.height)
-    if not _ramp_fits((lx, ly), (hx, hy), candidate.corners(), obstacles, ob, exclusion_zones):
+    if not _ramp_fits((lx, ly), (hx, hy), candidate.corners(), obstacles, ob, exclusion_zones, placed_ramps):
         return None
     return candidate
 
@@ -237,7 +281,7 @@ def generate_ramps(obstacles, spawn_points, seed=None, count=RAMP_MAX_COUNT, rin
                 normals.sort(key=lambda item: -abs(item[1][2] * tangent_dx + item[1][3] * tangent_dy))
 
                 for edge_index, _ in normals:
-                    ramp = _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng)
+                    ramp = _build_ramp_on_edge(ob, edge_index, obstacles, exclusion_zones, rng, tuple(ramps))
                     if ramp is not None:
                         chosen_ramp, chosen_obstacle = ramp, ob
                         break

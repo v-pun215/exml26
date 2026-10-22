@@ -29,25 +29,6 @@ def clamp_to_arena(spheres):
             sphere.vy = 0.0
 
 
-def resolve_ramps(spheres, ramps):
-    if not ramps:
-        return
-    for sphere in spheres:
-        if not sphere.alive:
-            continue
-        support = sphere.start_z
-        for ramp in ramps:
-            h = ramp.height_at(sphere.x, sphere.y)
-            if h is not None:
-                support = max(support, sphere.start_z + h)
-        if sphere.z <= support + 1e-6 and sphere.vz <= 0.0:
-            sphere.z = support
-            sphere.vz = 0.0
-            sphere.grounded = True
-        elif sphere.z > support + 1e-6:
-            sphere.grounded = False
-
-
 def resolve_ramp_collisions(spheres, ramps):
     if not ramps:
         return
@@ -110,22 +91,29 @@ def resolve_obstacle_collisions(spheres, obstacles):
             if not inside and dist > SPHERE_RADIUS:
                 continue
 
-            if sphere.speed >= OBSTACLE_LETHAL_SPEED:
+            cxp, cyp = closest
+            if inside:
+                nx, ny = cxp - sphere.x, cyp - sphere.y
+                norm = math.hypot(nx, ny)
+                if norm <= 1e-9:
+                    cx, cy = obstacle.centroid
+                    nx, ny = sphere.x - cx, sphere.y - cy
+                    norm = math.hypot(nx, ny) or 1.0
+                nx, ny = nx / norm, ny / norm
+            else:
+                nx, ny = sphere.x - cxp, sphere.y - cyp
+                norm = math.hypot(nx, ny) or 1.0
+                nx, ny = nx / norm, ny / norm
+
+            into_wall = (sphere.vx * nx + sphere.vy * ny) < 0.0
+            if sphere.speed >= OBSTACLE_LETHAL_SPEED and into_wall:
                 sphere.kill("wall")
                 break
 
             if inside:
-                cx, cy = obstacle.centroid
-                nx, ny = sphere.x - cx, sphere.y - cy
-                norm = math.hypot(nx, ny) or 1.0
-                nx, ny = nx / norm, ny / norm
-                sphere.x = cx + nx * (obstacle.bounding_radius + SPHERE_RADIUS)
-                sphere.y = cy + ny * (obstacle.bounding_radius + SPHERE_RADIUS)
+                sphere.x = cxp + nx * (SPHERE_RADIUS + 1e-3)
+                sphere.y = cyp + ny * (SPHERE_RADIUS + 1e-3)
             else:
-                cxp, cyp = closest
-                nx, ny = sphere.x - cxp, sphere.y - cyp
-                norm = math.hypot(nx, ny) or 1.0
-                nx, ny = nx / norm, ny / norm
                 overlap = SPHERE_RADIUS - dist
                 sphere.x += nx * overlap
                 sphere.y += ny * overlap
@@ -134,12 +122,16 @@ def resolve_obstacle_collisions(spheres, obstacles):
             sphere.vy = 0.0
 
 
-def resolve_obstacle_tops(spheres, obstacles):
+def resolve_ground(spheres, ramps, obstacles):
     for sphere in spheres:
         if not sphere.alive:
             continue
         support = sphere.start_z
-        for obstacle in obstacles:
+        for ramp in ramps or []:
+            h = ramp.height_at(sphere.x, sphere.y)
+            if h is not None:
+                support = max(support, sphere.start_z + h)
+        for obstacle in obstacles or []:
             if point_in_polygon(sphere.x, sphere.y, obstacle.points):
                 support = max(support, obstacle.height + SPHERE_RADIUS)
         if sphere.z <= support + 1e-6 and sphere.vz <= 0.0:
@@ -155,6 +147,8 @@ def resolve_sphere_collisions(spheres):
     for i in range(len(alive)):
         for j in range(i + 1, len(alive)):
             a, b = alive[i], alive[j]
+            if not a.alive or not b.alive:
+                continue
             dist = math.hypot(a.x - b.x, a.y - b.y)
             if dist > SPHERE_COLLISION_RADIUS:
                 continue

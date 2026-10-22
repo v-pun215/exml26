@@ -7,6 +7,7 @@ from engine.constants import (
     JUMP_SPEED,
     MAX_SPEED,
     SPHERE_RADIUS,
+    TICK_DT,
     TURN_RATE_BASE,
     TURN_SPEED_PENALTY,
 )
@@ -42,7 +43,7 @@ class Sphere:
     def speed(self):
         return math.hypot(self.vx, self.vy)
 
-    def apply_action(self, throttle, turn, jump, sonar_val=None):
+    def apply_action(self, throttle, turn, jump, sonar_val=None, dt=TICK_DT):
         if not self.alive:
             return
 
@@ -51,7 +52,7 @@ class Sphere:
 
         speed_ratio = min(1.0, self.speed / MAX_SPEED)
         turn_rate = TURN_RATE_BASE * (1.0 - speed_ratio * TURN_SPEED_PENALTY)
-        self.yaw += turn * turn_rate
+        self.yaw += turn * turn_rate * dt
 
         forward_x = math.sin(self.yaw)
         forward_y = math.cos(self.yaw)

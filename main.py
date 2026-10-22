@@ -5,8 +5,13 @@ from engine.game import Game
 
 
 def load_teams(path="teams.json"):
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"teams file not found: {path}")
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"invalid JSON in {path}: {e}")
 
 
 def main():

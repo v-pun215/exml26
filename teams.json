@@ -1,4 +1,4 @@
 [
   {"name": "red", "model_path": "teams/example_team/model.py", "color": "#c83c3c"},
-  {"name": "blue", "model_path": "teams/example_team2/model.py", "color": "#3c64dc"}
+  {"name": "blue", "model_path": "teams/example_team/model2.py", "color": "#3c64dc"}
 ]

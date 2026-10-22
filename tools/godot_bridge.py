@@ -33,8 +33,13 @@ def _build_game_over_frame(match_id, tick, score, teams):
 
 
 def _serve_live(args):
-    with open(args.teams) as f:
-        teams = json.load(f)
+    try:
+        with open(args.teams) as f:
+            teams = json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"teams file not found: {args.teams}")
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"invalid JSON in {args.teams}: {e}")
     game = Game(teams, spheres_per_team=args.spheres_per_team,
                 seed=args.seed, max_ticks=args.max_ticks)
     print(f"bridge: match {game.telemetry.match_id} ready, "
@@ -43,31 +48,40 @@ def _serve_live(args):
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
     server.listen(1)
+    server.setblocking(False)
     try:
         conn = None
         while not game.is_over():
             if conn is None:
-                print("bridge: waiting for Godot client...")
-                conn, addr = server.accept()
-                print(f"bridge: Godot connected from {addr}")
                 try:
-                    _send(conn, build_map_frame(
-                        game.telemetry.match_id, game.obstacles,
-                        game.flags, game.teams, game.max_ticks, game.ramps))
-                except OSError:
-                    conn.close()
+                    conn, addr = server.accept()
+                    print(f"bridge: Godot connected from {addr}")
+                except BlockingIOError:
                     conn = None
-                    continue
+                if conn is not None:
+                    try:
+                        _send(conn, build_map_frame(
+                            game.telemetry.match_id, game.obstacles,
+                            game.flags, game.teams, game.max_ticks, game.ramps,
+                            seed=game.seed))
+                    except OSError:
+                        conn.close()
+                        conn = None
+                        continue
             start = time.monotonic()
             game.step()
-            try:
-                _send(conn, build_tick_frame(
-                    game.telemetry.match_id, game.tick - 1, game.spheres,
-                    game.flags, game.score, game._respawn_at, game._death_log))
-            except OSError:
-                print("bridge: client disconnected, match continues")
-                conn.close()
-                conn = None
+            if conn is not None:
+                try:
+                    _send(conn, build_tick_frame(
+                        game.telemetry.match_id, game.tick - 1, game.spheres,
+                        game.flags, game.score, game._respawn_at, game._recent_deaths()))
+                except OSError:
+                    print("bridge: client disconnected, continuing headless")
+                    conn.close()
+                    conn = None
+            else:
+                if game.tick % 200 == 0:
+                    print(f"bridge: headless tick {game.tick} score {game.score}")
             elapsed = time.monotonic() - start
             remaining = 1.0 / args.fps - elapsed
             if remaining > 0:
@@ -88,8 +102,22 @@ def _serve_live(args):
 
 
 def _serve_replay(args):
-    lines = Path(args.replay).read_text().splitlines()
-    frames = [json.loads(line) for line in lines if line.strip()]
+    frames = []
+    skipped = 0
+    for line in Path(args.replay).read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            frame = json.loads(line)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if not isinstance(frame, dict) or frame.get("type") not in ("map", "tick"):
+            skipped += 1
+            continue
+        frames.append(frame)
+    if skipped:
+        print(f"bridge: skipped {skipped} bad lines in {args.replay}")
     print(f"bridge: replaying {len(frames)} frames on {args.host}:{args.port}")
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

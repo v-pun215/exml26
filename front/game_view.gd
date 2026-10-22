@@ -832,11 +832,10 @@ func _animate_agents(delta: float) -> void:
 		var jiggle := sin(phase) * clampf(sp * 0.06, 0.0, 1.0)
 		if capture_expr == "wobble":
 			jiggle = 1.0
-		var body_scale := Vector3(
-			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6 - jiggle * 0.09,
-			1.0 + air * 0.16 - squash * 0.48 - roll_squash + jiggle * 0.12,
-			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6 - jiggle * 0.09)
-		node.scale = body_scale
+		var stretch := 1.0 + air * 0.09 - squash * 0.30 - roll_squash * 0.9 - jiggle * 0.07
+		stretch = clampf(stretch, 0.6, 1.45)
+		var shrink := 1.0 / sqrt(stretch)
+		node.scale = Vector3(shrink, stretch, shrink)
 		var mesh := agent_meshes.get(sid, null) as MeshInstance3D
 		if mesh != null:
 			mesh.scale = Vector3.ONE
@@ -878,7 +877,7 @@ func _animate_agents(delta: float) -> void:
 		if not blob.is_empty():
 			var blob_node := blob["node"] as MeshInstance3D
 			var blob_copy := blob["mat"] as ShaderMaterial
-			blob_node.position = Vector3(0.0, (0.06 - node.position.y) / maxf(body_scale.y, 0.05), 0.0)
+			blob_node.position = Vector3(0.0, (0.06 - node.position.y) / maxf(stretch, 0.05), 0.0)
 			blob_node.scale = Vector3.ONE * (1.0 + air * 0.5)
 			blob_copy.set_shader_parameter("blob_color", Color(0.09, 0.13, 0.1, 0.5 - air * 0.28))
 

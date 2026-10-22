@@ -812,27 +812,36 @@ func _animate_agents(delta: float) -> void:
 		var prev_vy: float = state["prev_vy"]
 		var grounded := node.position.y <= sphere_r * 1.08
 		var squash: float = state["squash"]
-		if grounded and prev_vy < -4.0:
-			squash = clampf(-prev_vy * 0.06, 0.3, 1.0)
+		var squash_vel: float = state["squash_vel"]
+		if grounded and prev_vy < -3.0:
+			squash_vel -= clampf(-prev_vy * 0.55, 0.8, 3.4)
 		state["prev_vy"] = v.y
-		squash = move_toward(squash, 0.0, delta * 3.4)
+		squash_vel += (-squash * 95.0 - squash_vel * 11.0) * delta
+		squash += squash_vel * delta
+		squash = clampf(squash, -0.5, 0.55)
+		if capture_expr == "squash":
+			squash = 0.5
+		if capture_expr == "stretch":
+			squash = -0.45
 		state["squash"] = squash
+		state["squash_vel"] = squash_vel
 
 		var air := clampf((node.position.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
 		var roll_squash := clampf(sp * 0.006, 0.0, 0.09) if grounded else 0.0
 		var body_scale := Vector3(
-			1.0 - air * 0.07 + squash * 0.38 + roll_squash * 0.6,
-			1.0 + air * 0.14 - squash * 0.44 - roll_squash,
-			1.0 - air * 0.07 + squash * 0.38 + roll_squash * 0.6)
+			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6,
+			1.0 + air * 0.16 - squash * 0.48 - roll_squash,
+			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6)
+		node.scale = body_scale
 		var mesh := agent_meshes.get(sid, null) as MeshInstance3D
 		if mesh != null:
-			mesh.scale = body_scale
+			mesh.scale = Vector3.ONE
 
 		var face: Dictionary = agent_faces.get(sid, {})
 		if not face.is_empty():
 			var face_root := face["root"] as Node3D
 			face_root.basis = Basis.looking_at(-_head_facing(node, facing), Vector3.UP)
-			face_root.scale = body_scale
+			face_root.scale = Vector3.ONE
 			_drive_expression(sid, state, face_root, node, v, sp, air, delta)
 
 		var pv: Vector3 = state.get("vel_prev", v)
@@ -844,7 +853,11 @@ func _animate_agents(delta: float) -> void:
 		state["accel"] = accel
 		var lean_x := clampf(-accel.z * 0.01, -0.18, 0.18)
 		var lean_z := clampf(accel.x * 0.01, -0.18, 0.18)
-		node.quaternion = Quaternion(Vector3(1, 0, 0), lean_x) * Quaternion(Vector3(0, 0, 1), lean_z)
+		var wob_amp := 0.055 * clampf(sp * 0.05, 0.0, 1.0)
+		var wob_t := float(Time.get_ticks_msec()) / 1000.0
+		var wobble := Quaternion(Vector3(1, 0, 0), sin(wob_t * 2.2) * wob_amp) \
+			* Quaternion(Vector3(0, 0, 1), cos(wob_t * 1.7) * wob_amp)
+		node.quaternion = Quaternion(Vector3(1, 0, 0), lean_x) * Quaternion(Vector3(0, 0, 1), lean_z) * wobble
 
 		var contact_t: float = state["contact_t"] - delta
 		if grounded and sp > 8.0:
@@ -861,7 +874,7 @@ func _animate_agents(delta: float) -> void:
 		if not blob.is_empty():
 			var blob_node := blob["node"] as MeshInstance3D
 			var blob_copy := blob["mat"] as ShaderMaterial
-			blob_node.position = Vector3(0.0, 0.06 - node.position.y, 0.0)
+			blob_node.position = Vector3(0.0, (0.06 - node.position.y) / maxf(body_scale.y, 0.05), 0.0)
 			blob_node.scale = Vector3.ONE * (1.0 + air * 0.5)
 			blob_copy.set_shader_parameter("blob_color", Color(0.09, 0.13, 0.1, 0.5 - air * 0.28))
 
@@ -1616,7 +1629,8 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 
 	root.add_child(indicator)
 	agent_carry_indicators[sid] = {"root": indicator, "mat": ind_mat, "base_y": sphere_r * 1.9}
-	agent_states[sid] = {"facing": Vector3.FORWARD, "squash": 0.0, "prev_vy": 0.0,
+	agent_states[sid] = {"facing": Vector3.FORWARD, "squash": 0.0, "squash_vel": 0.0,
+		"prev_vy": 0.0,
 		"phase": 0.0, "blink": 0.0, "blink_phase": -1.0,
 		"blink_t": randf_range(0.6, 4.0), "double": false, "happy": 0.0,
 		"wide": 0.0, "squint": 0.0, "smile": 0.18, "mouth_open": 0.0,

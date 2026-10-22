@@ -30,7 +30,7 @@ float eye_arc(vec2 e) {
 void fragment() {
 	vec2 p = (UV - 0.5) * 2.0;
 
-	float r = 0.17 * (1.0 + wide * 0.42);
+	float r = 0.215 * (1.0 + wide * 0.42);
 	vec2 off = look_offset * 0.09;
 
 	float b0 = blink;
@@ -45,18 +45,18 @@ void fragment() {
 	float sy0 = 1.0 - squint * 0.55 - b0 * 0.93;
 	float sy1 = 1.0 - squint * 0.55 - b1 * 0.93;
 
-	vec2 e0 = p - vec2(-0.42, 0.30) - off;
-	vec2 e1 = p - vec2(0.42, 0.30) - off;
+	vec2 e0 = p - vec2(-0.40, 0.26) - off;
+	vec2 e1 = p - vec2(0.40, 0.26) - off;
 
 	float d0 = mix(eye_dot(e0, r, sy0), eye_arc(e0), happy);
 	float d1 = mix(eye_dot(e1, r, sy1), eye_arc(e1), happy);
 	float d_eye = min(d0, d1);
 
-	vec2 m = p - vec2(0.0, -0.26);
-	float curve = m.y - (smile * 1.6 * m.x * m.x);
-	float d_mouth = abs(curve) - 0.024;
-	d_mouth = max(d_mouth, abs(m.x) - 0.30);
-	float d_o = length(m / vec2(0.15, 0.19)) - 1.0;
+	vec2 m = p - vec2(0.0, -0.30);
+	float curve = m.y - (smile * 1.9 * m.x * m.x);
+	float d_mouth = abs(curve) - 0.034;
+	d_mouth = max(d_mouth, abs(m.x) - 0.34);
+	float d_o = length(m / vec2(0.16, 0.20)) - 1.0;
 	d_mouth = mix(d_mouth, d_o * 0.15, mouth_open);
 
 	vec3 col = vec3(0.0);
@@ -66,9 +66,9 @@ void fragment() {
 	col = mix(col, dot_color.rgb, eye_a);
 	alpha = max(alpha, eye_a);
 
-	vec2 g0 = e0 - vec2(-0.052, 0.058);
-	vec2 g1 = e1 - vec2(-0.052, 0.058);
-	float g_a = cover(min(length(g0), length(g1)) - 0.029)
+	vec2 g0 = e0 - vec2(-0.048, 0.052);
+	vec2 g1 = e1 - vec2(-0.048, 0.052);
+	float g_a = cover(min(length(g0), length(g1)) - 0.021)
 		* (1.0 - happy) * (1.0 - b0) * (1.0 - b1) * glint_amount * glint_color.a;
 	col = mix(col, glint_color.rgb, g_a);
 	alpha = max(alpha, g_a);

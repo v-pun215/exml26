@@ -828,10 +828,14 @@ func _animate_agents(delta: float) -> void:
 
 		var air := clampf((node.position.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
 		var roll_squash := clampf(sp * 0.006, 0.0, 0.09) if grounded else 0.0
+		var phase: float = state.get("phase", 0.0)
+		var jiggle := sin(phase) * clampf(sp * 0.06, 0.0, 1.0)
+		if capture_expr == "wobble":
+			jiggle = 1.0
 		var body_scale := Vector3(
-			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6,
-			1.0 + air * 0.16 - squash * 0.48 - roll_squash,
-			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6)
+			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6 - jiggle * 0.09,
+			1.0 + air * 0.16 - squash * 0.48 - roll_squash + jiggle * 0.12,
+			1.0 - air * 0.07 + squash * 0.42 + roll_squash * 0.6 - jiggle * 0.09)
 		node.scale = body_scale
 		var mesh := agent_meshes.get(sid, null) as MeshInstance3D
 		if mesh != null:
@@ -853,10 +857,10 @@ func _animate_agents(delta: float) -> void:
 		state["accel"] = accel
 		var lean_x := clampf(-accel.z * 0.01, -0.18, 0.18)
 		var lean_z := clampf(accel.x * 0.01, -0.18, 0.18)
-		var wob_amp := 0.055 * clampf(sp * 0.05, 0.0, 1.0)
+		var wob_amp := 0.10 * clampf(sp * 0.05, 0.0, 1.0)
 		var wob_t := float(Time.get_ticks_msec()) / 1000.0
-		var wobble := Quaternion(Vector3(1, 0, 0), sin(wob_t * 2.2) * wob_amp) \
-			* Quaternion(Vector3(0, 0, 1), cos(wob_t * 1.7) * wob_amp)
+		var wobble := Quaternion(Vector3(1, 0, 0), (sin(wob_t * 2.2) + sin(phase) * 0.7) * wob_amp) \
+			* Quaternion(Vector3(0, 0, 1), (cos(wob_t * 1.7) + cos(phase * 0.8) * 0.7) * wob_amp)
 		node.quaternion = Quaternion(Vector3(1, 0, 0), lean_x) * Quaternion(Vector3(0, 0, 1), lean_z) * wobble
 
 		var contact_t: float = state["contact_t"] - delta

@@ -6,6 +6,10 @@ import traceback
 
 _ctx = mp.get_context("spawn")
 
+IDLE_ACTION = (0.0, 0.0, False, None)
+READY_TOKEN = "__model_ready__"
+READY_TIMEOUT_S = 10.0
+
 
 def _load_decide(model_path):
     spec = importlib.util.spec_from_file_location("team_model", model_path)
@@ -47,38 +51,35 @@ def _worker_loop(model_path, conn):
     except Exception:
         print(f"worker: failed to load {model_path}", file=sys.stderr)
         traceback.print_exc()
-        decide = lambda observation: (0.0, 0.0, False, None)
+        decide = lambda observation: IDLE_ACTION
+
+    try:
+        conn.send((READY_TOKEN,))
+    except (BrokenPipeError, OSError):
+        return
 
     while True:
         try:
-            payload = conn.recv()
+            observation = conn.recv()
         except EOFError:
             break
-        if payload is None:
+        if observation is None:
             break
         try:
-            if isinstance(payload, list):
-                actions = []
-                for observation in payload:
-                    try:
-                        actions.append(_normalize(decide(observation)))
-                    except Exception:
-                        actions.append((0.0, 0.0, False, None))
-                conn.send(actions)
-            else:
-                try:
-                    action = _normalize(decide(payload))
-                except Exception:
-                    action = (0.0, 0.0, False, None)
-                conn.send(action)
+            action = _normalize(decide(observation))
+        except Exception:
+            action = IDLE_ACTION
+        try:
+            conn.send(action)
         except (BrokenPipeError, OSError):
             break
 
 
 class ModelWorker:
-    def __init__(self, team, model_path):
+    def __init__(self, team, model_path, sphere_id=None):
         self.team = team
         self.model_path = model_path
+        self.sphere_id = sphere_id
         self._process = None
         self._conn = None
         self._spawn()
@@ -93,35 +94,45 @@ class ModelWorker:
             pass
         self._process = process
         self._conn = parent_conn
+        self._ready = False
+
+    def wait_ready(self, timeout=READY_TIMEOUT_S):
+        if self._ready or self._conn is None:
+            return self._ready
+        if not self._conn.poll(timeout):
+            return False
+        try:
+            message = self._conn.recv()
+        except EOFError:
+            return False
+        self._ready = isinstance(message, tuple) and message and message[0] == READY_TOKEN
+        return self._ready
 
     def _respawn(self):
         self.close()
         self._spawn()
 
     def get_action(self, observation, timeout):
-        actions = self.get_actions([observation], timeout)
-        return actions[0] if actions else (0.0, 0.0, False, None)
+        if not self.wait_ready():
+            self._respawn()
+            return IDLE_ACTION
 
-    def get_actions(self, observations, timeout):
         try:
-            self._conn.send(list(observations))
+            self._conn.send(observation)
         except (BrokenPipeError, OSError):
             self._respawn()
-            return [(0.0, 0.0, False, None)] * len(observations)
+            return IDLE_ACTION
 
         if self._conn.poll(timeout):
             try:
                 result = self._conn.recv()
             except EOFError:
                 self._respawn()
-                return [(0.0, 0.0, False, None)] * len(observations)
-            if not isinstance(result, list) or len(result) != len(observations):
-                self._respawn()
-                return [(0.0, 0.0, False, None)] * len(observations)
-            return [_normalize(a) for a in result]
+                return IDLE_ACTION
+            return _normalize(result)
 
         self._respawn()
-        return [(0.0, 0.0, False, None)] * len(observations)
+        return IDLE_ACTION
 
     def close(self):
         if self._process is not None and self._process.is_alive():

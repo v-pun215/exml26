@@ -15,8 +15,8 @@ var have_map := false
 const CAM_PITCH := 0.96
 const CAM_FOV := 50.0
 const LOOK_SENS := 0.0028
-const COL_GRASS_A := Color(0.27, 0.52, 0.20)
-const COL_GRASS_B := Color(0.37, 0.62, 0.25)
+const COL_GRASS_A := Color(0.24, 0.48, 0.52)
+const COL_GRASS_B := Color(0.30, 0.56, 0.58)
 const VIEW_VERSION := 9
 
 var cam_target := Vector3.ZERO
@@ -26,6 +26,7 @@ var cam_pitch := CAM_PITCH
 var free_pos := Vector3.ZERO
 var free_yaw := 0.0
 var free_pitch := -CAM_PITCH
+var mouse_reset_frames := 0
 var free_cursor_free := false
 var caption: Label
 
@@ -76,10 +77,35 @@ var ground_mat: ShaderMaterial
 var ramp_top_mat: ShaderMaterial
 var ramp_side_mat: ShaderMaterial
 var pole_mat: ShaderMaterial
-var ramp_grain_tex: ImageTexture
 var aurora_curtain_shader: Shader
 var map_glow_shader: Shader
 var toon_shader: Shader
+var outline_shader: Shader
+var outline_mat: ShaderMaterial
+var blob_shader: Shader
+var blob_mat: ShaderMaterial
+var face_shader: Shader
+var ramp_shader: Shader
+var streak_shader: Shader
+var ring_shader: Shader
+var puff_shader: Shader
+var ui_font: Font
+var agent_faces := {}
+var agent_blobs := {}
+var agent_streaks := {}
+var agent_rings := {}
+var agent_states := {}
+var fx_root: Node3D
+var puff_root: Node3D
+var puffs: Array = []
+var map_ramps: Array = []
+
+var capture_path := ""
+var capture_countdown := 0
+var capture_follow := false
+var capture_portrait := false
+var capture_expr := ""
+var capture_lock := false
 
 var agent_grounded := {}
 var agent_carrying := {}
@@ -94,6 +120,20 @@ var score_player: AudioStreamPlayer
 
 
 func _ready() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--capture-follow":
+			capture_follow = true
+		elif arg == "--capture-portrait":
+			capture_portrait = true
+		elif arg.begins_with("--expr="):
+			capture_expr = arg.substr(7)
+		elif arg.begins_with("--port="):
+			port = arg.substr(7).to_int()
+		elif arg.begins_with("--host="):
+			host = arg.substr(7)
+		elif arg.begins_with("--capture="):
+			capture_path = arg.substr(10)
+			capture_countdown = 420
 	map_root = Node3D.new()
 	map_root.name = "Map"
 	add_child(map_root)
@@ -103,7 +143,12 @@ func _ready() -> void:
 	bg_root = Node3D.new()
 	bg_root.name = "Background"
 	add_child(bg_root)
-
+	fx_root = Node3D.new()
+	fx_root.name = "Fx"
+	add_child(fx_root)
+	puff_root = Node3D.new()
+	puff_root.name = "Puffs"
+	add_child(puff_root)
 	camera = get_node_or_null("Camera3D") as Camera3D
 	if camera == null:
 		camera = Camera3D.new()
@@ -117,15 +162,51 @@ func _ready() -> void:
 		sun.name = "DirectionalLight3D"
 		add_child(sun)
 	sun.rotation = Vector3(-0.9, -0.6, 0.0)
-	sun.light_energy = 1.5
-	sun.light_color = Color(1.0, 0.96, 0.88)
-	sun.light_angular_distance = 2.5
+	sun.light_energy = 0.85
+	sun.light_color = Color(1.0, 0.96, 0.86)
+	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
-	sun.shadow_opacity = 0.82
-	sun.shadow_blur = 1.4
+	sun.shadow_opacity = 0.5
+	sun.shadow_blur = 2.0
 	sun.shadow_bias = 0.03
 	sun.directional_shadow_max_distance = 300.0
 	sun.directional_shadow_blend_splits = true
+
+	var fill := DirectionalLight3D.new()
+	fill.name = "FillLight3D"
+	fill.rotation = Vector3(-0.45, 2.4, 0.0)
+	fill.light_energy = 0.12
+	fill.light_color = Color(0.72, 0.85, 1.0)
+	fill.shadow_enabled = false
+	add_child(fill)
+
+	toon_shader = load("res://toon.gdshader")
+	outline_shader = load("res://outline.gdshader")
+	outline_mat = ShaderMaterial.new()
+	outline_mat.shader = outline_shader
+	blob_shader = load("res://blob.gdshader")
+	blob_mat = ShaderMaterial.new()
+	blob_mat.shader = blob_shader
+	face_shader = load("res://face.gdshader")
+	ramp_shader = load("res://ramp.gdshader")
+	streak_shader = load("res://streak.gdshader")
+	ring_shader = load("res://ring.gdshader")
+	puff_shader = load("res://puff.gdshader")
+	var base_font := load("res://fonts/Coolvetica.otf") as FontFile
+	if base_font != null:
+		var tracked := FontVariation.new()
+		tracked.base_font = base_font
+		tracked.spacing_glyph = 2
+		ui_font = tracked
+	obstacle_mat = _toon_material(Color.WHITE, 0.06, Color(0, 0, 0), 0.0, true)
+
+	ground_mat = ShaderMaterial.new()
+	ground_mat.shader = load("res://ground_facets.gdshader")
+
+	ramp_top_mat = ShaderMaterial.new()
+	ramp_top_mat.shader = ramp_shader
+	ramp_side_mat = _toon_material(Color(0.70, 0.50, 0.30), 0.04, Color(0.80, 0.58, 0.34), 0.16, false, false)
+	pole_mat = _toon_material(Color(0.86, 0.86, 0.92), 0.06)
 
 	_spawn_clouds()
 	_spawn_aurora_curtains()
@@ -137,12 +218,16 @@ func _ready() -> void:
 	hud.position = Vector2(12, 10)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.text = "waiting for bridge..."
+	hud.add_theme_font_override("font", ui_font)
+	hud.add_theme_font_size_override("font_size", 22)
 	layer.add_child(hud)
 	hint_label = Label.new()
-	hint_label.position = Vector2(12, 34)
+	hint_label.position = Vector2(12, 38)
 	hint_label.text = "Enter next bot · Esc free cam"
 	hint_label.modulate = Color(1, 1, 1, 0.55)
 	hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint_label.add_theme_font_override("font", ui_font)
+	hint_label.add_theme_font_size_override("font_size", 16)
 	layer.add_child(hint_label)
 	caption = Label.new()
 	caption.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -151,6 +236,8 @@ func _ready() -> void:
 	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	caption.visible = false
+	caption.add_theme_font_override("font", ui_font)
+	caption.add_theme_font_size_override("font_size", 26)
 	layer.add_child(caption)
 
 	minimap = Control.new()
@@ -165,19 +252,6 @@ func _ready() -> void:
 	minimap.draw.connect(_draw_minimap)
 	layer.add_child(minimap)
 
-
-	toon_shader = load("res://toon.gdshader")
-	obstacle_mat = _toon_material(Color(0.50, 0.45, 0.36), 0.92, 0.12)
-
-	ground_mat = ShaderMaterial.new()
-	ground_mat.shader = load("res://ground_facets.gdshader")
-
-	ramp_grain_tex = _make_ramp_grain(64)
-
-	ramp_top_mat = _toon_material(Color(0.69, 0.50, 0.32), 0.65, 0.16, Color(0.69, 0.50, 0.32), 0.22)
-	ramp_side_mat = _toon_material(Color(0.33, 0.22, 0.14), 0.88, 0.10, Color(0.33, 0.22, 0.14), 0.12)
-	pole_mat = _toon_material(Color(0.40, 0.36, 0.30), 0.72, 0.12)
-
 	_setup_audio()
 	tcp.connect_to_host(host, port)
 
@@ -189,35 +263,35 @@ func _draw_minimap() -> void:
 	var scale := (span - pad * 2.0) / maxf(arena, 1.0)
 	var origin := Vector2(sz.x * 0.5, sz.y * 0.5)
 
-	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.07, 0.06, 0.13, 0.82), true)
-	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.68, 0.58, 0.95, 0.70), false, 1.0)
+	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.99, 0.97, 0.93, 0.9), true)
+	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.45, 0.38, 0.62, 0.6), false, 1.0)
 
 	var field := arena * scale
 	minimap.draw_rect(Rect2(origin - Vector2(field, field) * 0.5, Vector2(field, field)),
-		Color(0.14, 0.13, 0.24, 0.92), true)
+		Color(0.66, 0.87, 0.48, 0.95), true)
 	minimap.draw_rect(Rect2(origin - Vector2(field, field) * 0.5, Vector2(field, field)),
-		Color(0.45, 0.38, 0.68, 0.45), false, 1.0)
+		Color(0.55, 0.45, 0.85, 0.6), false, 1.0)
 
 	for quad in mini_ramps:
 		var pts := PackedVector2Array()
 		for p in quad:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.62, 0.47, 0.78, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.99, 0.80, 0.40, 0.95))
 
 	for poly in mini_obstacles:
 		var pts := PackedVector2Array()
 		for p in poly:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.30, 0.27, 0.42, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.94, 0.50, 0.40, 0.95))
 
 	for team in mini_flags.keys():
 		var fp: Vector2 = mini_flags[team]
 		var col: Color = team_colors.get(team, Color(1, 1, 1))
 		var sp := origin + fp * scale
-		minimap.draw_line(sp + Vector2(0, 2.5), sp + Vector2(0, -7.0), Color(0.95, 0.95, 1.0, 0.95), 1.0)
+		minimap.draw_line(sp + Vector2(0, 2.5), sp + Vector2(0, -7.0), Color(0.3, 0.26, 0.4, 0.95), 1.0)
 		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), col, true)
-		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), Color(0.95, 0.95, 1.0, 0.85), false, 1.0)
-		minimap.draw_circle(sp + Vector2(0, 2.5), 1.2, Color(0.95, 0.95, 1.0, 0.95))
+		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), Color(0.3, 0.26, 0.4, 0.8), false, 1.0)
+		minimap.draw_circle(sp + Vector2(0, 2.5), 1.2, Color(0.3, 0.26, 0.4, 0.95))
 
 	for sid in last_pose.keys():
 		if not last_info.has(sid):
@@ -230,48 +304,50 @@ func _draw_minimap() -> void:
 		var team := String(info.get("team", "?"))
 		var base: Color = team_colors.get(team, Color(1, 1, 1))
 		var hfrac := clampf((pos.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
-		var light := Color.from_hsv(base.h, base.s * 0.38, minf(1.0, base.v * 1.5 + 0.2))
+		var light := Color.from_hsv(base.h, base.s * 0.45, minf(1.0, base.v * 0.75 + 0.15))
 		var col := base.lerp(light, hfrac)
 		var sp := origin + Vector2(pos.x, pos.z) * scale
 		minimap.draw_circle(sp, 4.0, col)
 
 
-func _toon_material(color: Color, material_roughness := 0.72, rim := 0.16,
-		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false) -> ShaderMaterial:
+func _toon_material(color: Color, rim := 0.08,
+		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false,
+		outlined := true) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = toon_shader
 	mat.set_shader_parameter("base_color", color)
-	mat.set_shader_parameter("roughness", material_roughness)
 	mat.set_shader_parameter("rim_strength", rim)
 	mat.set_shader_parameter("emission_color", emission)
 	mat.set_shader_parameter("emission_strength", emission_strength)
 	mat.set_shader_parameter("use_vertex_color", vertex_color)
+	if outlined:
+		mat.next_pass = outline_mat
 	return mat
 
 
 func _spawn_clouds() -> void:
-	var cloud_mat := _toon_material(Color(0.95, 0.93, 0.90), 1.0, 0.08, Color(0.95, 0.93, 0.90), 0.16)
+	var cloud_mat := _toon_material(Color(0.95, 0.97, 1.0), 0.02, Color(1, 1, 1), 0.85)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5
 	cloud_root = Node3D.new()
 	cloud_root.name = "Clouds"
 	add_child(cloud_root)
-	for i in range(14):
+	for i in range(20):
 		var ang := rng.randf() * TAU
-		var dist := rng.randf_range(0.0, 480.0)
-		var base_y := rng.randf_range(90.0, 170.0)
+		var dist := rng.randf_range(260.0, 700.0)
+		var base_y := rng.randf_range(80.0, 200.0)
 		var cluster := Node3D.new()
 		cluster.position = Vector3(cos(ang) * dist, base_y, sin(ang) * dist)
 		cloud_root.add_child(cluster)
 		cloud_clusters.append({"node": cluster, "base_y": base_y, "phase": rng.randf() * TAU})
-		for p in range(rng.randi_range(3, 5)):
+		for p in range(rng.randi_range(4, 6)):
 			var mi := MeshInstance3D.new()
 			var sm := SphereMesh.new()
-			sm.radius = rng.randf_range(10.0, 22.0)
-			sm.height = sm.radius * 1.6
-			sm.radial_segments = 8
-			sm.rings = 5
+			sm.radius = rng.randf_range(16.0, 34.0)
+			sm.height = sm.radius * 1.35
+			sm.radial_segments = 10
+			sm.rings = 6
 			mi.mesh = sm
 			mi.material_override = cloud_mat
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -307,9 +383,9 @@ func _spawn_aurora_curtains() -> void:
 		mat.set_shader_parameter("seed", rng.randf() * 50.0)
 		mat.set_shader_parameter("density", rng.randf_range(1.5, 4.0))
 		mat.set_shader_parameter("speed", rng.randf_range(0.08, 0.18))
-		mat.set_shader_parameter("intensity", rng.randf_range(1.0, 1.6))
-		mat.set_shader_parameter("color_a", Color(0.85, 0.32, 0.62))
-		mat.set_shader_parameter("color_b", Color(0.3, 0.78, 0.78))
+		mat.set_shader_parameter("intensity", rng.randf_range(0.15, 0.3))
+		mat.set_shader_parameter("color_a", Color(0.72, 0.88, 1.0))
+		mat.set_shader_parameter("color_b", Color(0.92, 0.86, 1.0))
 		quad.material_override = mat
 		quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		curtain_root.add_child(quad)
@@ -341,7 +417,7 @@ func _add_bg_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, base: Co
 	if n.y < 0.0:
 		n = -n
 	var j := 0.93 + _hash01((a.x + b.x + c.x) * 0.37 + 17.0, (a.z + b.z + c.z) * 0.41 + 23.0) * 0.12
-	var col := Color(base.r * j, base.g * j, base.b * j)
+	var col := Color(base.r * j, base.g * j, base.b * j).srgb_to_linear()
 	st.set_normal(n)
 	st.set_color(col)
 	st.add_vertex(a)
@@ -377,16 +453,16 @@ func _spawn_background() -> void:
 			else:
 				_add_bg_facet(st, p00, p10, p01, base)
 				_add_bg_facet(st, p10, p11, p01, base)
-	var terrain_mat := _toon_material(Color.WHITE, 1.0, 0.08, Color(0.08, 0.13, 0.08), 0.05, true)
+	var terrain_mat := _toon_material(Color.WHITE, 0.03, Color(0.08, 0.13, 0.08), 0.05, true, false)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = terrain_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	bg_root.add_child(mi)
 
-	var trunk_mat := _toon_material(Color(0.32, 0.22, 0.14), 0.95, 0.10)
-	var canopy_a := _toon_material(Color(0.16, 0.38, 0.16), 0.9, 0.18)
-	var canopy_b := _toon_material(Color(0.24, 0.50, 0.20), 0.9, 0.18)
+	var trunk_mat := _toon_material(Color(0.52, 0.34, 0.22), 0.05)
+	var canopy_a := _toon_material(Color(0.22, 0.58, 0.26), 0.06)
+	var canopy_b := _toon_material(Color(0.32, 0.72, 0.32), 0.06)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 71
@@ -441,22 +517,6 @@ func _make_tree(rng: RandomNumberGenerator, x: float, z: float, ground_h: float,
 	return root
 
 
-func _make_ramp_grain(size: int) -> ImageTexture:
-	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 17
-	for y in range(size):
-		for x in range(size):
-			var fx := float(x) / size
-			var fy := float(y) / size
-			var grain := 0.5 + 0.5 * sin(fy * TAU * 14.0 + sin(fx * TAU * 2.0) * 1.3)
-			var v := 0.84 + grain * 0.1
-			v += rng.randf_range(-0.04, 0.04)
-			v = clampf(v, 0.68, 1.0)
-			img.set_pixel(x, y, Color(v, v, v))
-	return ImageTexture.create_from_image(img)
-
-
 func _setup_audio() -> void:
 	music_player = AudioStreamPlayer.new()
 	var music := load("res://audio/music/ambient_loop.wav") as AudioStreamWAV
@@ -489,7 +549,7 @@ func _setup_audio() -> void:
 
 
 func _setup_camera() -> void:
-	cam_dist = arena * 1.25
+	cam_dist = arena * 1.7
 	cam_target = Vector3.ZERO
 	cam_yaw = 0.0
 	cam_pitch = CAM_PITCH
@@ -508,6 +568,8 @@ func _follow_zoom() -> float:
 
 
 func _update_camera() -> void:
+	if capture_lock:
+		return
 	if follow_idx >= 0 and follow_idx < agent_order.size() and last_pose.has(agent_order[follow_idx]):
 		var st: Dictionary = last_pose[agent_order[follow_idx]]
 		follow_pos = st["pos"]
@@ -519,10 +581,12 @@ func _update_camera() -> void:
 
 
 func _place_follow_cam() -> void:
+	if capture_lock:
+		return
 	var fwd := Vector3(sin(follow_yaw), 0, cos(follow_yaw))
 	var zf := _follow_zoom()
-	camera.position = follow_pos - fwd * (9.0 * zf) + Vector3(0, 6.0 * zf, 0)
-	camera.look_at(follow_pos + fwd * (4.0 * zf))
+	camera.position = follow_pos - fwd * (8.5 * zf) + Vector3(0, 4.2 * zf, 0)
+	camera.look_at(follow_pos + Vector3(0, 1.8 * zf, 0))
 
 
 func _agent_tag(sid: int) -> String:
@@ -586,25 +650,31 @@ func _refresh_order() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and follow_idx < 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		free_yaw -= event.relative.x * LOOK_SENS
-		free_pitch = clampf(free_pitch - event.relative.y * LOOK_SENS, -1.55, 1.55)
+	if event is InputEventMouseMotion:
+		if mouse_reset_frames > 0:
+			mouse_reset_frames -= 1
+			return
+		if follow_idx < 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			free_yaw -= event.relative.x * LOOK_SENS
+			free_pitch = clampf(free_pitch - event.relative.y * LOOK_SENS, -1.55, 1.55)
 	if event is InputEventMouseButton and event.pressed:
 		if follow_idx < 0 and free_cursor_free and event.button_index == MOUSE_BUTTON_LEFT:
 			free_cursor_free = false
 		match event.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
 				if follow_idx < 0:
-					free_pos -= _free_fwd() * 40.0
-					_clamp_free_pos()
+					if capture_path == "":
+						free_pos -= _free_fwd() * 40.0
+						_clamp_free_pos()
 					_update_camera()
 				else:
 					cam_dist = clampf(cam_dist * 0.9, 60.0, 600.0)
 					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
 				if follow_idx < 0:
-					free_pos += _free_fwd() * 40.0
-					_clamp_free_pos()
+					if capture_path == "":
+						free_pos += _free_fwd() * 40.0
+						_clamp_free_pos()
 					_update_camera()
 				else:
 					cam_dist = clampf(cam_dist * 1.1, 60.0, 600.0)
@@ -612,22 +682,23 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	if follow_idx < 0 and not match_over:
+	if follow_idx < 0 and not match_over and capture_path == "":
 		var want := Input.MOUSE_MODE_VISIBLE if free_cursor_free else Input.MOUSE_MODE_CAPTURED
 		if Input.mouse_mode != want:
 			Input.mouse_mode = want
+			mouse_reset_frames = 3
 	elif Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_update_agent_poses()
 	if follow_idx < 0 and not match_over:
 		var mv := Vector3.ZERO
-		if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
+		if capture_path == "" and (Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)):
 			mv += _free_fwd()
-		if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
+		if capture_path == "" and (Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)):
 			mv -= _free_fwd()
-		if Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT):
+		if capture_path == "" and (Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)):
 			mv -= _free_right()
-		if Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT):
+		if capture_path == "" and (Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)):
 			mv += _free_right()
 		if mv != Vector3.ZERO:
 			free_pos += mv.normalized() * 140.0 * delta
@@ -655,7 +726,8 @@ func _process(delta: float) -> void:
 			free_cursor_free = not free_cursor_free
 	esc_was = esc_now
 	_roll_agents(delta)
-	_squash_agents()
+	_animate_agents(delta)
+	_update_puffs(delta)
 	_drift_clouds(delta)
 	_sway_flags(delta)
 	_spin_carry_indicators(delta)
@@ -671,6 +743,42 @@ func _process(delta: float) -> void:
 			retry_in = 1.0
 			hud.text = "waiting for bridge %s:%d ..." % [host, port]
 			tcp.connect_to_host(host, port)
+	if capture_countdown > 0 and have_map:
+		free_yaw = 0.0
+		free_pitch = -cam_pitch
+		capture_countdown -= 1
+		if capture_follow and capture_countdown == 60:
+			_cycle_follow()
+		if capture_portrait and agent_order.size() > 0:
+			var framed := false
+			if capture_expr == "ramp" and map_ramps.size() > 0:
+				var rp: Dictionary = map_ramps[0]
+				var rc: Vector2 = rp["c"]
+				var rd: Vector2 = rp["d"]
+				var side := Vector2(-rd.y, rd.x)
+				var base := Vector3(rc.x, 0.0, rc.y)
+				camera.position = base + Vector3(side.x, 0.0, side.y) * 16.0 + Vector3(0.0, 5.0, 0.0)
+				camera.look_at(base + Vector3(0.0, 1.5, 0.0), Vector3.UP)
+				capture_lock = true
+				framed = true
+			if not framed:
+				var pid := _portrait_agent()
+				if pid >= 0 and last_pose.has(pid):
+					var pp: Vector3 = last_pose[pid]["pos"]
+					var pstate: Dictionary = agent_states.get(pid, {})
+					var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
+					camera.position = pp + pfacing * 3.6 + Vector3(0.0, 2.4, 0.0)
+					camera.look_at(pp + Vector3(0.0, 0.75, 0.0), Vector3.UP)
+					capture_lock = true
+		if capture_countdown == 0:
+			_capture_frame.call_deferred()
+
+
+func _capture_frame() -> void:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.save_png(capture_path)
+	get_tree().quit()
 
 
 func _display_pose(sid: int) -> Array:
@@ -702,14 +810,388 @@ func _update_agent_poses() -> void:
 			(agent_mats[sid] as ShaderMaterial).set_shader_parameter("base_color", base.lerp(Color(1, 1, 1), hfrac * 0.85))
 
 
-func _squash_agents() -> void:
-	for sid in agent_meshes.keys():
-		var mesh := agent_meshes[sid] as MeshInstance3D
-		if mesh == null or not agent_vel.has(sid):
+func _animate_agents(delta: float) -> void:
+	for sid in agent_states.keys():
+		var state: Dictionary = agent_states[sid]
+		var node := sphere_nodes.get(sid, null) as Node3D
+		if node == null:
 			continue
-		var vz: float = (agent_vel[sid] as Vector3).y
-		var s := clampf(vz * 0.025, -0.22, 0.22)
-		mesh.scale = Vector3(1.0 - s * 0.5, 1.0 + s, 1.0 - s * 0.5)
+		var v: Vector3 = agent_vel.get(sid, Vector3.ZERO)
+		var sp := Vector2(v.x, v.z).length()
+
+		var facing: Vector3 = state["facing"]
+		if sp > 0.6:
+			var want := Vector3(v.x, 0.0, v.z).normalized()
+			facing = facing.lerp(want, clampf(delta * 9.0, 0.0, 1.0)).normalized()
+		state["facing"] = facing
+
+		var prev_vy: float = state["prev_vy"]
+		var grounded := node.position.y <= sphere_r * 1.08
+		var squash: float = state["squash"]
+		var squash_vel: float = state["squash_vel"]
+		if grounded and prev_vy < -3.0:
+			squash_vel -= clampf(-prev_vy * 0.55, 0.8, 3.4)
+		state["prev_vy"] = v.y
+		squash_vel += (-squash * 95.0 - squash_vel * 11.0) * delta
+		squash += squash_vel * delta
+		squash = clampf(squash, -0.5, 0.55)
+		if capture_expr == "squash":
+			squash = 0.5
+		if capture_expr == "stretch":
+			squash = -0.45
+		state["squash"] = squash
+		state["squash_vel"] = squash_vel
+
+		var air := clampf((node.position.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
+		var roll_squash := clampf(sp * 0.006, 0.0, 0.09) if grounded else 0.0
+		var phase: float = state.get("phase", 0.0)
+		var jiggle := sin(phase) * clampf(sp * 0.06, 0.0, 1.0)
+		if capture_expr == "wobble":
+			jiggle = 1.0
+		var stretch := 1.0 + air * 0.09 - squash * 0.30 - roll_squash * 0.9 - jiggle * 0.07
+		stretch = clampf(stretch, 0.6, 1.45)
+		var shrink := 1.0 / sqrt(stretch)
+		node.scale = Vector3(shrink, stretch, shrink)
+		var mesh := agent_meshes.get(sid, null) as MeshInstance3D
+		if mesh != null:
+			mesh.scale = Vector3.ONE
+
+		var face: Dictionary = agent_faces.get(sid, {})
+		if not face.is_empty():
+			var face_root := face["root"] as Node3D
+			face_root.basis = Basis.looking_at(-_head_facing(node, facing), Vector3.UP)
+			face_root.scale = Vector3.ONE
+			_drive_expression(sid, state, face_root, node, v, sp, air, delta)
+
+		var pv: Vector3 = state.get("vel_prev", v)
+		var raw_accel := Vector3.ZERO
+		if delta > 0.0001:
+			raw_accel = (v - pv) / delta
+		state["vel_prev"] = v
+		var accel: Vector3 = state.get("accel", Vector3.ZERO).lerp(raw_accel, clampf(delta * 8.0, 0.0, 1.0))
+		state["accel"] = accel
+		var lean_x := clampf(-accel.z * 0.01, -0.18, 0.18)
+		var lean_z := clampf(accel.x * 0.01, -0.18, 0.18)
+		var wob_amp := 0.10 * clampf(sp * 0.05, 0.0, 1.0)
+		var wob_t := float(Time.get_ticks_msec()) / 1000.0
+		var wobble := Quaternion(Vector3(1, 0, 0), (sin(wob_t * 2.2) + sin(phase) * 0.7) * wob_amp) \
+			* Quaternion(Vector3(0, 0, 1), (cos(wob_t * 1.7) + cos(phase * 0.8) * 0.7) * wob_amp)
+		node.quaternion = Quaternion(Vector3(1, 0, 0), lean_x) * Quaternion(Vector3(0, 0, 1), lean_z) * wobble
+
+		var contact_t: float = state["contact_t"] - delta
+		if grounded and sp > 8.0:
+			if contact_t <= 0.0:
+				contact_t = 0.12
+				_spawn_puff(Vector3(node.position.x, 0.14, node.position.z),
+					Color(1.0, 0.98, 0.9, 0.42), sphere_r * 0.5, 0.22,
+					Vector3(0.0, 0.9, 0.0), 1.5)
+		else:
+			contact_t = 0.0
+		state["contact_t"] = contact_t
+
+		var blob: Dictionary = agent_blobs.get(sid, {})
+		if not blob.is_empty():
+			var blob_node := blob["node"] as MeshInstance3D
+			var blob_copy := blob["mat"] as ShaderMaterial
+			blob_node.position = Vector3(0.0, (0.06 - node.position.y) / maxf(stretch, 0.05), 0.0)
+			blob_node.scale = Vector3.ONE * (1.0 + air * 0.5)
+			blob_copy.set_shader_parameter("blob_color", Color(0.09, 0.13, 0.1, 0.5 - air * 0.28))
+
+		var streaks: Dictionary = agent_streaks.get(sid, {})
+		if not streaks.is_empty():
+			var s_node := streaks["node"] as MeshInstance3D
+			var s_mat := streaks["mat"] as ShaderMaterial
+			var dir := Vector3(v.x, 0.0, v.z)
+			var strength := 0.0
+			if sp > 5.0 and dir.length() > 0.01:
+				dir = dir.normalized()
+				var length := clampf(sp * 0.4, 0.0, 9.0)
+				strength = clampf((sp - 5.0) / 8.0, 0.0, 1.0) * 0.45
+				var side := Vector3.UP.cross(dir).normalized()
+				s_node.basis = Basis(dir, side, dir.cross(side).normalized())
+				s_node.scale = Vector3(length, sphere_r * 1.3, 1.0)
+				s_node.position = Vector3(0.0, 0.05 - node.position.y, 0.0) - dir * (length * 0.5)
+				s_node.visible = true
+				var stint := String(last_info.get(sid, {}).get("team", "?")) if last_info.has(sid) else "?"
+				var stint_color: Color = team_colors.get(stint, Color(1, 1, 1))
+				s_mat.set_shader_parameter("streak_color", Color(stint_color.r, stint_color.g, stint_color.b, 1.0))
+			else:
+				s_node.visible = false
+			s_mat.set_shader_parameter("strength", strength)
+
+		var rings: Dictionary = agent_rings.get(sid, {})
+		if not rings.is_empty():
+			var r_node := rings["node"] as MeshInstance3D
+			var r_mat := rings["mat"] as ShaderMaterial
+			var ring_t: float = state["ring_t"] - delta
+			if ring_t > 0.0:
+				var rt := 1.0 - ring_t / 0.35
+				r_node.visible = true
+				r_mat.set_shader_parameter("ring_radius", rt)
+				r_mat.set_shader_parameter("ring_alpha", (1.0 - rt) * 0.7)
+			else:
+				ring_t = 0.0
+				r_node.visible = false
+			state["ring_t"] = ring_t
+
+
+func _portrait_agent() -> int:
+	var best := -1
+	var best_d := -1.0
+	for sid in last_pose.keys():
+		var p: Vector3 = last_pose[sid]["pos"]
+		var d := 999.0
+		for poly in mini_obstacles:
+			var c := Vector2.ZERO
+			for q in poly:
+				c += q
+			c /= maxf(float(poly.size()), 1.0)
+			d = minf(d, Vector2(p.x - c.x, p.z - c.y).length())
+		if d > best_d:
+			best_d = d
+			best = int(sid)
+	return best
+
+
+func _head_facing(node: Node3D, facing: Vector3) -> Vector3:
+	if camera == null:
+		return facing
+	var to_cam := camera.global_position - node.global_position
+	to_cam.y = 0.0
+	if to_cam.length() < 0.01:
+		return facing
+	to_cam = to_cam.normalized()
+	var away := clampf(-facing.dot(to_cam), 0.0, 1.0)
+	var blend := clampf((away - 0.25) / 0.5, 0.0, 1.0) * 0.2
+	return facing.lerp(to_cam, blend).normalized()
+
+
+func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Node3D,
+		v: Vector3, sp: float, air: float, delta: float) -> void:
+	var face: Dictionary = agent_faces.get(sid, {})
+	var face_mat := face["mat"] as ShaderMaterial
+	if face_mat == null:
+		return
+
+	var carrying := agent_carrying.get(sid, null) != null
+	var team := String(last_info[sid].get("team", "")) if last_info.has(sid) else ""
+	var airborne := air > 0.08
+	var fast := sp > 10.0
+	var celebrate: float = state.get("celebrate", 0.0)
+	if celebrate > 0.0:
+		celebrate = maxf(0.0, celebrate - delta)
+		state["celebrate"] = celebrate
+
+	var happy_t := 0.0
+	var wide_t := 0.0
+	var squint_t := 0.0
+	var smile_t := 0.2
+	var open_t := 0.0
+	if airborne:
+		wide_t = 1.0
+		smile_t = -0.5
+		open_t = 0.5
+	elif carrying or celebrate > 0.0:
+		happy_t = 1.0
+		smile_t = 1.0
+	elif fast:
+		squint_t = 0.6
+		smile_t = 0.6
+	else:
+		squint_t = 0.45
+		smile_t = 0.45
+
+	if capture_expr != "":
+		happy_t = 0.0
+		wide_t = 0.0
+		squint_t = 0.0
+		smile_t = 0.18
+		open_t = 0.0
+		match capture_expr:
+			"happy":
+				happy_t = 1.0
+				smile_t = 1.0
+			"wide":
+				wide_t = 1.0
+				smile_t = -0.85
+				open_t = 0.55
+			"worried":
+				wide_t = 0.7
+				smile_t = -0.9
+			"arc":
+				happy_t = 1.0
+
+	var blink: float = state["blink"]
+	var phase: float = state["blink_phase"]
+	var timer: float = state["blink_t"] - delta
+	if timer <= 0.0:
+		timer = randf_range(1.8, 4.5)
+		phase = 0.0
+		state["double"] = randf() < 0.22
+	state["blink_t"] = timer
+	if phase >= 0.0:
+		phase += delta
+		var dur := 0.18
+		if phase < dur * 0.35:
+			blink = phase / (dur * 0.35)
+		elif phase < dur * 0.6:
+			blink = 1.0
+		else:
+			blink = clampf(1.0 - (phase - dur * 0.6) / (dur * 0.4), 0.0, 1.0)
+		if phase >= dur:
+			if bool(state.get("double", false)):
+				state["double"] = false
+				phase = 0.0
+			else:
+				phase = -1.0
+				blink = 0.0
+	state["blink_phase"] = phase
+	state["blink"] = blink
+	if capture_expr == "blink":
+		blink = 1.0
+
+	var wink_t: float = state.get("wink_t", 0.0) - delta
+	var wink: float = 0.0
+	var wink_side: float = -1.0
+	if wink_t <= 0.0:
+		wink_t = randf_range(3.0, 9.0)
+		state["wink_phase"] = -1.0
+		state["wink_side"] = -1.0
+	state["wink_t"] = wink_t
+	var wphase: float = state.get("wink_phase", -1.0)
+	if wphase < 0.0 and randf() < delta * 0.15:
+		wphase = 0.0
+		state["wink_side"] = 0.0 if randf() < 0.5 else 1.0
+	if wphase >= 0.0:
+		wphase += delta
+		var wdur := 0.16
+		if wphase < wdur * 0.35:
+			wink = wphase / (wdur * 0.35)
+		elif wphase < wdur * 0.6:
+			wink = 1.0
+		else:
+			wink = clampf(1.0 - (wphase - wdur * 0.6) / (wdur * 0.4), 0.0, 1.0)
+		if wphase >= wdur:
+			wphase = -1.0
+			wink = 0.0
+			state["wink_side"] = -1.0
+	state["wink_phase"] = wphase
+	state["wink"] = wink
+	wink_side = state.get("wink_side", -1.0)
+	state["wink_side"] = wink_side
+
+	var happy: float = state["happy"]
+	happy = lerpf(happy, happy_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["happy"] = happy
+	var wide: float = state["wide"]
+	wide = lerpf(wide, wide_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["wide"] = wide
+	var squint: float = state["squint"]
+	squint = lerpf(squint, squint_t, clampf(delta * 5.0, 0.0, 1.0))
+	state["squint"] = squint
+	var smile: float = state["smile"]
+	smile = lerpf(smile, smile_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["smile"] = smile
+	var open: float = state["mouth_open"]
+	open = lerpf(open, open_t, clampf(delta * 7.0, 0.0, 1.0))
+	state["mouth_open"] = open
+
+	var look_world := Vector3.ZERO
+	var have_look := false
+	var target_team := team if carrying else _other_team(team)
+	if target_team != "" and flag_nodes.has(target_team):
+		var fn := flag_nodes[target_team] as Node3D
+		if fn != null:
+			look_world = fn.global_position
+			have_look = true
+	if not have_look and sp > 1.0:
+		look_world = node.global_position + Vector3(v.x, 0.0, v.z)
+		have_look = true
+	var look_target := Vector2.ZERO
+	if have_look:
+		var local := face_root.global_transform.affine_inverse() * look_world
+		look_target = Vector2(clampf(local.x, -1.0, 1.0), clampf(local.y, -1.0, 1.0))
+		if look_target.length() > 1.0:
+			look_target = look_target.normalized()
+	var look: Vector2 = state["look"]
+	look = look.lerp(look_target * 0.55, clampf(delta * 7.0, 0.0, 1.0))
+	state["look"] = look
+
+	face_mat.set_shader_parameter("look_offset", look)
+	face_mat.set_shader_parameter("blink", blink)
+	face_mat.set_shader_parameter("wink", wink)
+	face_mat.set_shader_parameter("wink_side", wink_side)
+	face_mat.set_shader_parameter("happy", happy)
+	face_mat.set_shader_parameter("wide", wide)
+	face_mat.set_shader_parameter("squint", squint)
+	face_mat.set_shader_parameter("smile", smile)
+	face_mat.set_shader_parameter("mouth_open", open)
+
+
+func _trigger_ring(sid: int, pos: Vector3) -> void:
+	var rings: Dictionary = agent_rings.get(sid, {})
+	if rings.is_empty():
+		return
+	var r_node := rings["node"] as MeshInstance3D
+	r_node.global_position = Vector3(pos.x, 0.06, pos.z)
+	agent_states[sid]["ring_t"] = 0.35
+
+
+func _celebrate_team(team: String) -> void:
+	for sid in agent_states.keys():
+		if String(last_info.get(sid, {}).get("team", "")) == team:
+			agent_states[sid]["celebrate"] = 1.8
+
+
+func _other_team(team: String) -> String:
+	for t in team_colors.keys():
+		if t != team:
+			return t
+	return team
+
+
+func _spawn_puff(pos: Vector3, color: Color, size: float, life: float,
+		vel: Vector3, growth: float) -> void:
+	if puffs.size() > 40:
+		return
+	var mi := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	mi.mesh = quad
+	var mat := ShaderMaterial.new()
+	mat.shader = puff_shader
+	mat.set_shader_parameter("puff_color", color)
+	mat.set_shader_parameter("alpha", 1.0)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	puff_root.add_child(mi)
+	mi.global_position = pos
+	puffs.append({"node": mi, "mat": mat, "vel": vel, "life": life, "max": life,
+		"growth": growth, "size": size})
+
+
+func _update_puffs(delta: float) -> void:
+	var i := puffs.size() - 1
+	while i >= 0:
+		var p: Dictionary = puffs[i]
+		var life: float = p["life"] - delta
+		var node := p["node"] as MeshInstance3D
+		if life <= 0.0 or node == null:
+			if node != null:
+				node.queue_free()
+			puffs.remove_at(i)
+			i -= 1
+			continue
+		p["life"] = life
+		var t := 1.0 - life / float(p["max"])
+		var mat := p["mat"] as ShaderMaterial
+		mat.set_shader_parameter("alpha", pow(1.0 - t, 1.4))
+		node.global_position += (p["vel"] as Vector3) * delta
+		var s := float(p["size"]) * (1.0 + float(p["growth"]) * t)
+		node.scale = Vector3(s, s, s)
+		if camera != null:
+			node.look_at(camera.global_position, Vector3.UP)
+		i -= 1
 
 
 func _spin_carry_indicators(_delta: float) -> void:
@@ -749,7 +1231,11 @@ func _roll_agents(delta: float) -> void:
 		if sp < 0.05:
 			continue
 		var axis := Vector3(v.z, 0, -v.x).normalized()
-		(agent_meshes[sid] as MeshInstance3D).rotate(axis, sp * delta / maxf(sphere_r, 0.01))
+		var amount := sp * delta / maxf(sphere_r, 0.01)
+		(agent_meshes[sid] as MeshInstance3D).rotate(axis, amount)
+		var state: Dictionary = agent_states.get(sid, {})
+		if not state.is_empty():
+			state["phase"] = float(state.get("phase", 0.0)) + amount
 
 
 func _pump() -> void:
@@ -791,6 +1277,8 @@ func _clear(node: Node3D) -> void:
 func _build_map(frame: Dictionary) -> void:
 	_clear(map_root)
 	_clear(agent_root)
+	_clear(fx_root)
+	_clear(puff_root)
 	sphere_nodes.clear()
 	flag_nodes.clear()
 	flag_banners.clear()
@@ -800,6 +1288,12 @@ func _build_map(frame: Dictionary) -> void:
 	agent_order.clear()
 	agent_grounded.clear()
 	agent_carrying.clear()
+	agent_faces.clear()
+	agent_blobs.clear()
+	agent_states.clear()
+	agent_streaks.clear()
+	agent_rings.clear()
+	puffs.clear()
 	last_score.clear()
 	follow_idx = -1
 	_refresh_caption()
@@ -826,7 +1320,7 @@ func _build_map(frame: Dictionary) -> void:
 	for t in frame.get("teams", []):
 		var base := Color(String(t.get("color", "#ffffff")))
 		team_colors[String(t.get("name", "?"))] = base
-		var mat := _toon_material(base, 0.55, 0.20)
+		var mat := _toon_material(base, 0.08)
 		team_mats[String(t.get("name", "?"))] = mat
 
 	var half := arena * 0.5
@@ -847,12 +1341,12 @@ func _build_map(frame: Dictionary) -> void:
 	glow_mat.set_shader_parameter("plane_size", glow_size)
 	glow_mat.set_shader_parameter("arena_half", half)
 	glow_mat.set_shader_parameter("falloff", 26.0)
-	glow_mat.set_shader_parameter("intensity", 0.16)
+	glow_mat.set_shader_parameter("intensity", 0.10)
 	glow_plane_mi.material_override = glow_mat
 	glow_plane_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	map_root.add_child(glow_plane_mi)
 
-	var border_mat := _toon_material(Color(0.40, 0.37, 0.48), 0.9, 0.15)
+	var border_mat := _toon_material(Color(0.58, 0.42, 0.88), 0.06)
 	for spec in [
 		[Vector3(0, 1, -half), Vector3(arena + 2.0, 2.0, 1.0)],
 		[Vector3(0, 1, half), Vector3(arena + 2.0, 2.0, 1.0)],
@@ -887,7 +1381,10 @@ func _build_map(frame: Dictionary) -> void:
 		var rdy := float(r.get("dy", 0.0))
 		var rlen := float(r.get("length", 10.0))
 		var rwid := float(r.get("width", 5.0))
-		map_root.add_child(_wedge(rcx, rcy, rdx, rdy, rlen, rwid, float(r.get("height", 3.0))))
+		var rhei := float(r.get("height", 3.0))
+		map_ramps.append({"c": Vector2(rcx, rcy), "d": Vector2(rdx, rdy),
+			"len": rlen, "wid": rwid, "hei": rhei})
+		map_root.add_child(_wedge(rcx, rcy, rdx, rdy, rlen, rwid, rhei))
 		var dir := Vector2(rdx, rdy).normalized()
 		var side := Vector2(-dir.y, dir.x)
 		var ctr := Vector2(rcx, rcy)
@@ -912,7 +1409,7 @@ func _hash01(x: float, z: float) -> float:
 
 
 func _rock_height(x: float, z: float, base_height: float) -> float:
-	return base_height * (1.0 + _hash01(x * 0.6, z * 0.6) * 0.3)
+	return base_height * (1.0 + _hash01(x * 0.6, z * 0.6) * 0.14)
 
 
 func _face_normal_up(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
@@ -923,40 +1420,6 @@ func _face_normal_up(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
 	if n.y < 0.0:
 		n = -n
 	return n
-
-
-func _ground_height(x: float, z: float) -> float:
-	var broad := _hash01(x * 0.035, z * 0.035) * 0.06
-	var fine := _hash01(x * 0.21 + 11.0, z * 0.21 + 11.0) * 0.02
-	return -(broad + fine)
-
-
-func _facet_color(cx: float, cz: float) -> Color:
-	var t := _hash01(cx * 0.07 + 31.0, cz * 0.07 + 31.0)
-	var warm := Color(0.62, 0.78, 0.42)
-	var cool := Color(0.32, 0.62, 0.48)
-	var col := cool.lerp(warm, t)
-	var shade := 0.9 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.22
-	return Color(col.r * shade, col.g * shade, col.b * shade)
-
-
-func _add_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var mx := (a.x + b.x + c.x) / 3.0
-	var mz := (a.z + b.z + c.z) / 3.0
-	var col := _facet_color(mx, mz)
-	var phase := _hash01(mx * 1.37 + 3.0, mz * 1.91 + 9.0)
-	var rate := _hash01(mx * 0.73 + 21.0, mz * 2.41 + 17.0)
-	var uv := Vector2(phase, rate)
-	st.set_normal(_face_normal_up(a, b, c))
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(a)
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(b)
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(c)
 
 
 func _make_ground_mesh(size: float, divisions: int) -> MeshInstance3D:
@@ -970,21 +1433,19 @@ func _make_ground_mesh(size: float, divisions: int) -> MeshInstance3D:
 			var x1 := x0 + step
 			var z0 := -half + float(iz) * step
 			var z1 := z0 + step
-
-			var p00 := Vector3(x0, _ground_height(x0, z0), z0)
-			var p10 := Vector3(x1, _ground_height(x1, z0), z0)
-			var p11 := Vector3(x1, _ground_height(x1, z1), z1)
-			var p01 := Vector3(x0, _ground_height(x0, z1), z1)
-
-			if _hash01(float(ix) * 3.7, float(iz) * 5.1) < 0.5:
-				_add_facet(st, p00, p10, p11)
-				_add_facet(st, p00, p11, p01)
-			else:
-				_add_facet(st, p00, p10, p01)
-				_add_facet(st, p10, p11, p01)
+			_add_ground_quad(st,
+				Vector3(x0, 0.0, z0), Vector3(x1, 0.0, z0),
+				Vector3(x1, 0.0, z1), Vector3(x0, 0.0, z1))
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	return mi
+
+
+func _add_ground_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	for v in [a, b, c, a, c, d]:
+		st.set_normal(Vector3.UP)
+		st.set_uv(Vector2(v.x, v.z))
+		st.add_vertex(v)
 
 
 func _prism(points: Array, height: float) -> MeshInstance3D:
@@ -996,6 +1457,8 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 		var empty := MeshInstance3D.new()
 		empty.mesh = ArrayMesh.new()
 		return empty
+	var top_col := Color(0.99, 0.58, 0.48).srgb_to_linear()
+	var side_col := Color(0.78, 0.29, 0.23).srgb_to_linear()
 	var cx := 0.0
 	var cz := 0.0
 	for p in points:
@@ -1019,19 +1482,28 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 		var a1 := Vector3(ax, _rock_height(ax, az, height), az)
 		var b1 := Vector3(bx, _rock_height(bx, bz, height), bz)
 		st.set_normal(normal)
+		st.set_color(side_col)
 		st.add_vertex(a0)
+		st.set_color(side_col)
 		st.add_vertex(b0)
+		st.set_color(side_col)
 		st.add_vertex(b1)
+		st.set_color(side_col)
 		st.add_vertex(a0)
+		st.set_color(side_col)
 		st.add_vertex(b1)
+		st.set_color(side_col)
 		st.add_vertex(a1)
 	var c := Vector3(cx, _rock_height(cx, cz, height), cz)
 	for i in range(n):
 		var a := Vector3(float(points[i][0]), _rock_height(float(points[i][0]), float(points[i][1]), height), float(points[i][1]))
 		var b := Vector3(float(points[(i + 1) % n][0]), _rock_height(float(points[(i + 1) % n][0]), float(points[(i + 1) % n][1]), height), float(points[(i + 1) % n][1]))
 		st.set_normal(_face_normal_up(c, a, b))
+		st.set_color(top_col)
 		st.add_vertex(c)
+		st.set_color(top_col)
 		st.add_vertex(a)
+		st.set_color(top_col)
 		st.add_vertex(b)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
@@ -1121,17 +1593,66 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	sm.radial_segments = 24
 	sm.rings = 16
 	mi.mesh = sm
-	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.4, 0.35)
+	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.10)
+	mat.set_shader_parameter("cap_amount", 1.0)
 	mi.material_override = mat
 	agent_mats[sid] = mat
 	agent_meshes[sid] = mi
 	root.add_child(mi)
 
+	var face_root := Node3D.new()
+	var face_mi := MeshInstance3D.new()
+	face_mi.mesh = _make_face_patch(sphere_r)
+	var face_copy := ShaderMaterial.new()
+	face_copy.shader = face_shader
+	face_mi.material_override = face_copy
+	face_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	face_root.add_child(face_mi)
+	root.add_child(face_root)
+	agent_faces[sid] = {"root": face_root, "mat": face_copy}
+
+	var blob := MeshInstance3D.new()
+	var blob_quad := QuadMesh.new()
+	blob_quad.size = Vector2(sphere_r * 2.8, sphere_r * 2.8)
+	blob.mesh = blob_quad
+	var blob_copy := blob_mat.duplicate() as ShaderMaterial
+	blob.material_override = blob_copy
+	blob.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(blob)
+	agent_blobs[sid] = {"node": blob, "mat": blob_copy}
+
+	var streak := MeshInstance3D.new()
+	var streak_quad := QuadMesh.new()
+	streak_quad.size = Vector2(1.0, 1.0)
+	streak.mesh = streak_quad
+	var streak_copy := ShaderMaterial.new()
+	streak_copy.shader = streak_shader
+	streak.material_override = streak_copy
+	streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	streak.visible = false
+	root.add_child(streak)
+	agent_streaks[sid] = {"node": streak, "mat": streak_copy}
+
+	var ring := MeshInstance3D.new()
+	var ring_quad := QuadMesh.new()
+	ring_quad.size = Vector2(1.0, 1.0)
+	ring.mesh = ring_quad
+	var ring_copy := ShaderMaterial.new()
+	ring_copy.shader = ring_shader
+	ring.material_override = ring_copy
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	ring.scale = Vector3(sphere_r * 5.0, sphere_r * 5.0, 1.0)
+	ring.visible = false
+	fx_root.add_child(ring)
+	agent_rings[sid] = {"node": ring, "mat": ring_copy}
+
 	var indicator := Node3D.new()
 	indicator.position = Vector3(0, sphere_r * 1.9, 0)
 	indicator.visible = false
 
-	var ind_mat := _toon_material(Color.WHITE, 0.6, 0.2, Color.WHITE, 0.35)
+	var ind_mat := _toon_material(Color.WHITE, 0.05, Color.WHITE, 0.35)
 	var ind_chip := MeshInstance3D.new()
 	var ind_chip_mesh := BoxMesh.new()
 	ind_chip_mesh.size = Vector3(0.22, 0.22, 0.04)
@@ -1141,7 +1662,54 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 
 	root.add_child(indicator)
 	agent_carry_indicators[sid] = {"root": indicator, "mat": ind_mat, "base_y": sphere_r * 1.9}
+	agent_states[sid] = {"facing": Vector3.FORWARD, "squash": 0.0, "squash_vel": 0.0,
+		"prev_vy": 0.0,
+		"phase": 0.0, "blink": 0.0, "blink_phase": -1.0,
+		"blink_t": randf_range(0.6, 4.0), "double": false, "happy": 0.0,
+		"wide": 0.0, "squint": 0.0, "smile": 0.18, "mouth_open": 0.0,
+		"look": Vector2.ZERO, "ring_t": 0.0, "contact_t": 0.0,
+		"vel_prev": Vector3.ZERO, "accel": Vector3.ZERO, "celebrate": 0.0,
+		"wink": 0.0, "wink_side": -1.0, "wink_t": randf_range(1.0, 6.0),
+		"wink_phase": -1.0}
 	return root
+
+
+func _make_face_patch(radius: float) -> ArrayMesh:
+	var extent := 0.95
+	var res := 12
+	var r := radius * 1.012
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for iy in range(res):
+		for ix in range(res):
+			var u0 := lerpf(-1.0, 1.0, float(ix) / float(res))
+			var u1 := lerpf(-1.0, 1.0, float(ix + 1) / float(res))
+			var v0 := lerpf(-1.0, 1.0, float(iy) / float(res))
+			var v1 := lerpf(-1.0, 1.0, float(iy + 1) / float(res))
+			var a := _face_point(r, extent, Vector2(u0, v0))
+			var b := _face_point(r, extent, Vector2(u1, v0))
+			var c := _face_point(r, extent, Vector2(u1, v1))
+			var d := _face_point(r, extent, Vector2(u0, v1))
+			_add_face_tri(st, a, b, c, Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1))
+			_add_face_tri(st, a, c, d, Vector2(u0, v0), Vector2(u1, v1), Vector2(u0, v1))
+	return st.commit()
+
+
+func _face_point(radius: float, extent: float, uv2: Vector2) -> Vector3:
+	var local := uv2 * extent
+	var theta := local.length()
+	if theta < 0.0001:
+		return Vector3(0.0, 0.0, radius)
+	var tangent := Vector3(local.x, local.y, 0.0).normalized()
+	return (Vector3(0.0, 0.0, 1.0) * cos(theta) + tangent * sin(theta)).normalized() * radius
+
+
+func _add_face_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+	for pair in [[a, ua], [b, ub], [c, uc]]:
+		st.set_normal((pair[0] as Vector3).normalized())
+		st.set_uv((pair[1] as Vector2) * 0.5 + Vector2(0.5, 0.5))
+		st.add_vertex(pair[0])
 
 
 func _make_flag(f: Dictionary) -> Node3D:
@@ -1223,6 +1791,7 @@ func _show_game_over(frame: Dictionary) -> void:
 		var over := Label.new()
 		over.text = "MATCH COMPLETE"
 		var over_ls := LabelSettings.new()
+		over_ls.font = ui_font
 		over_ls.font_size = 28
 		over_ls.font_color = Color(0.8, 0.82, 0.95, 0.7)
 		over.label_settings = over_ls
@@ -1231,6 +1800,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		winner_label = Label.new()
 		go_winner_ls = LabelSettings.new()
+		go_winner_ls.font = ui_font
 		go_winner_ls.font_size = 84
 		go_winner_ls.outline_size = 16
 		go_winner_ls.outline_color = Color(0.02, 0.02, 0.06, 0.95)
@@ -1243,6 +1813,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		sub_label = Label.new()
 		var sub_ls := LabelSettings.new()
+		sub_ls.font = ui_font
 		sub_ls.font_size = 26
 		sub_ls.font_color = Color(0.9, 0.9, 0.98, 0.85)
 		sub_label.label_settings = sub_ls
@@ -1262,6 +1833,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		foot_label = Label.new()
 		var foot_ls := LabelSettings.new()
+		foot_ls.font = ui_font
 		foot_ls.font_size = 16
 		foot_ls.font_color = Color(1, 1, 1, 0.45)
 		foot_label.label_settings = foot_ls
@@ -1299,6 +1871,7 @@ func _show_game_over(frame: Dictionary) -> void:
 		var lbl := Label.new()
 		lbl.text = "%s    %d" % [e[0].to_upper(), e[1]]
 		var ls := LabelSettings.new()
+		ls.font = ui_font
 		ls.font_size = 22
 		ls.font_color = Color(0.95, 0.95, 1.0, 0.9)
 		lbl.label_settings = ls
@@ -1348,6 +1921,7 @@ func _apply_tick(frame: Dictionary) -> void:
 		var was_grounded = agent_grounded.get(sid, grounded)
 		if grounded and not was_grounded:
 			land_player.play()
+			_trigger_ring(sid, raw)
 		elif not grounded and was_grounded and float(s.get("vz", 0.0)) > 3.0:
 			jump_player.play()
 		agent_grounded[sid] = grounded
@@ -1376,6 +1950,7 @@ func _apply_tick(frame: Dictionary) -> void:
 	for k in sc.keys():
 		if int(sc[k]) > int(last_score.get(k, 0)):
 			score_player.play()
+			_celebrate_team(String(k))
 		last_score[k] = int(sc[k])
 	var order: Array = sc.keys()
 	order.sort()

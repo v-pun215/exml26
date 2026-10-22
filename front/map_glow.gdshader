@@ -1,7 +1,7 @@
 shader_type spatial;
 render_mode blend_add, cull_disabled, unshaded, depth_draw_never, shadows_disabled, fog_disabled;
 
-uniform vec4 glow_color : source_color = vec4(0.58, 0.46, 0.96, 1.0);
+uniform vec4 glow_color : source_color = vec4(0.55, 0.86, 0.98, 1.0);
 uniform float plane_size = 400.0;
 uniform float arena_half = 100.0;
 uniform float falloff : hint_range(2.0, 120.0) = 26.0;

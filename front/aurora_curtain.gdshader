@@ -1,11 +1,11 @@
 shader_type spatial;
 render_mode blend_add, cull_disabled, unshaded, depth_draw_never, shadows_disabled, fog_disabled;
 
-uniform vec4 color_a : source_color = vec4(0.85, 0.35, 0.65, 1.0);
-uniform vec4 color_b : source_color = vec4(0.25, 0.75, 0.75, 1.0);
+uniform vec4 color_a : source_color = vec4(0.96, 0.72, 0.86, 1.0);
+uniform vec4 color_b : source_color = vec4(0.62, 0.88, 0.98, 1.0);
 uniform float speed : hint_range(0.0, 2.0) = 0.12;
 uniform float density : hint_range(0.5, 8.0) = 2.5;
-uniform float intensity : hint_range(0.0, 3.0) = 1.2;
+uniform float intensity : hint_range(0.0, 3.0) = 0.55;
 uniform float seed : hint_range(0.0, 100.0) = 0.0;
 
 float hash(vec2 p) {

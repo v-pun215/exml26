@@ -1,23 +1,28 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_toon, specular_toon;
 
-uniform float flash_period : hint_range(1.0, 30.0) = 7.0;
-uniform float flash_amount : hint_range(0.0, 1.0) = 0.28;
-uniform vec4 flash_tint : source_color = vec4(0.72, 0.92, 0.6, 1.0);
+uniform vec4 turf_color : source_color = vec4(0.44, 0.74, 0.24, 1.0);
+uniform vec4 turf_color_alt : source_color = vec4(0.37, 0.67, 0.22, 1.0);
+uniform vec4 line_color : source_color = vec4(0.99, 0.9, 0.62, 1.0);
+uniform float stripe_width : hint_range(2.0, 60.0) = 18.0;
+uniform float ring_radius : hint_range(0.0, 200.0) = 54.0;
+uniform float ring_width : hint_range(0.5, 12.0) = 1.8;
+uniform float sweep_period : hint_range(1.0, 30.0) = 6.0;
+uniform float sweep_amount : hint_range(0.0, 0.5) = 0.10;
 
 void fragment() {
-	float phase = UV.x;
-	float rate = mix(0.55, 1.75, UV.y);
+	float stripe = step(0.0, sin(UV.x * PI / stripe_width));
+	vec3 base = mix(turf_color_alt.rgb, turf_color.rgb, stripe);
 
-	float cycle = fract(TIME / flash_period * rate + phase);
-	float pulse = smoothstep(0.0, 0.10, cycle) * (1.0 - smoothstep(0.10, 0.34, cycle));
+	float d = abs(length(UV) - ring_radius);
+	float ring = 1.0 - smoothstep(ring_width, ring_width + 1.5, d);
+	base = mix(base, line_color.rgb, ring * 0.65);
 
-	vec3 base = COLOR.rgb;
-	vec3 lit = mix(base, flash_tint.rgb, 0.55) * (1.0 + flash_amount);
+	float cycle = fract(TIME / sweep_period + (UV.x + UV.y) * 0.008);
+	float sweep = smoothstep(0.0, 0.05, cycle) * (1.0 - smoothstep(0.05, 0.22, cycle));
 
-	ALBEDO = mix(base, lit, pulse);
-	ROUGHNESS = 0.92;
+	ALBEDO = base * (1.0 + sweep * sweep_amount);
 	METALLIC = 0.0;
-	RIM = 0.10;
-	RIM_TINT = 0.45;
+	SPECULAR = 0.0;
+	ROUGHNESS = 1.0;
 }

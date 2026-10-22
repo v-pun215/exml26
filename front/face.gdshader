@@ -2,6 +2,7 @@ shader_type spatial;
 render_mode blend_mix, cull_disabled, unshaded, depth_draw_never, shadows_disabled, fog_disabled;
 
 uniform vec4 dot_color : source_color = vec4(0.06, 0.05, 0.12, 1.0);
+uniform vec4 lash_color : source_color = vec4(0.13, 0.08, 0.15, 1.0);
 uniform vec4 glint_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec2 look_offset = vec2(0.0);
 uniform float blink = 0.0;
@@ -13,6 +14,7 @@ uniform float squint = 0.0;
 uniform float smile = 0.0;
 uniform float mouth_open = 0.0;
 uniform float glint_amount = 1.0;
+uniform float lash_amount : hint_range(0.0, 2.0) = 1.0;
 
 float cover(float d) {
 	return 1.0 - smoothstep(-0.009, 0.009, d);
@@ -25,6 +27,30 @@ float eye_dot(vec2 e, float r, float squash_y) {
 float eye_arc(vec2 e) {
 	float d = abs(length(e - vec2(0.0, -0.14)) - 0.22) - 0.030;
 	return max(d, -(e.y + 0.14));
+}
+
+float sd_segment(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+
+float lid_lash(vec2 eq, float r, float side) {
+	float dl = length(eq) - r;
+	float outer = clamp(side * eq.x / max(r, 0.001), 0.0, 1.0);
+	float band = 1.0 - smoothstep(0.004, 0.024, abs(dl - 0.024));
+	float top = smoothstep(0.06 * r, 0.40 * r, eq.y);
+	return band * top * outer;
+}
+
+float flick_lash(vec2 eq, float r, float side) {
+	vec2 corner = vec2(side * 0.66 * r, 0.60 * r);
+	vec2 tip_a = corner + vec2(side * 0.24 * r, 0.34 * r);
+	vec2 tip_b = corner + vec2(side * 0.40 * r, 0.12 * r);
+	float a = 1.0 - smoothstep(0.0, 0.020, sd_segment(eq, corner, tip_a));
+	float b = 1.0 - smoothstep(0.0, 0.016, sd_segment(eq, corner, tip_b));
+	return max(a, b);
 }
 
 void fragment() {
@@ -52,6 +78,11 @@ void fragment() {
 	float d1 = mix(eye_dot(e1, r, sy1), eye_arc(e1), happy);
 	float d_eye = min(d0, d1);
 
+	vec2 eq0 = vec2(e0.x, e0.y / max(sy0, 0.02));
+	vec2 eq1 = vec2(e1.x, e1.y / max(sy1, 0.02));
+	float lash = max(lid_lash(eq0, r, -1.0), lid_lash(eq1, r, 1.0));
+	float flick = max(flick_lash(eq0, r, -1.0), flick_lash(eq1, r, 1.0));
+
 	vec2 m = p - vec2(0.0, -0.30);
 	float curve = m.y - (smile * 1.9 * m.x * m.x);
 	float d_mouth = abs(curve) - 0.034;
@@ -61,6 +92,10 @@ void fragment() {
 
 	vec3 col = vec3(0.0);
 	float alpha = 0.0;
+
+	float lash_a = max(lash, flick) * lash_amount * lash_color.a;
+	col = mix(col, lash_color.rgb, lash_a);
+	alpha = max(alpha, lash_a);
 
 	float eye_a = cover(d_eye) * dot_color.a;
 	col = mix(col, dot_color.rgb, eye_a);

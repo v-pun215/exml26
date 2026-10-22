@@ -144,7 +144,7 @@ def decide(observation):
         ex, ey = -hx, -hy
 
     score = observation.get("score", {}) or {}
-    if _last_score is not None and score.get(team, 0) > _last_score:
+    if player == 1 and _last_score is not None and score.get(team, 0) > _last_score:
         print(f"[{team} tick={tick}] SCORED! {score}", flush=True)
     _last_score = score.get(team, 0)
 

@@ -15,8 +15,8 @@ var have_map := false
 const CAM_PITCH := 0.96
 const CAM_FOV := 50.0
 const LOOK_SENS := 0.0028
-const COL_GRASS_A := Color(0.27, 0.52, 0.20)
-const COL_GRASS_B := Color(0.37, 0.62, 0.25)
+const COL_GRASS_A := Color(0.30, 0.60, 0.44)
+const COL_GRASS_B := Color(0.38, 0.70, 0.50)
 const VIEW_VERSION := 9
 
 var cam_target := Vector3.ZERO
@@ -26,6 +26,7 @@ var cam_pitch := CAM_PITCH
 var free_pos := Vector3.ZERO
 var free_yaw := 0.0
 var free_pitch := -CAM_PITCH
+var mouse_reset_frames := 0
 var free_cursor_free := false
 var caption: Label
 
@@ -76,10 +77,15 @@ var ground_mat: ShaderMaterial
 var ramp_top_mat: ShaderMaterial
 var ramp_side_mat: ShaderMaterial
 var pole_mat: ShaderMaterial
-var ramp_grain_tex: ImageTexture
 var aurora_curtain_shader: Shader
 var map_glow_shader: Shader
 var toon_shader: Shader
+var outline_shader: Shader
+var outline_mat: ShaderMaterial
+
+var capture_path := ""
+var capture_countdown := 0
+var capture_follow := false
 
 var agent_grounded := {}
 var agent_carrying := {}
@@ -94,6 +100,12 @@ var score_player: AudioStreamPlayer
 
 
 func _ready() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--capture-follow":
+			capture_follow = true
+		elif arg.begins_with("--capture="):
+			capture_path = arg.substr(10)
+			capture_countdown = 90
 	map_root = Node3D.new()
 	map_root.name = "Map"
 	add_child(map_root)
@@ -117,15 +129,23 @@ func _ready() -> void:
 		sun.name = "DirectionalLight3D"
 		add_child(sun)
 	sun.rotation = Vector3(-0.9, -0.6, 0.0)
-	sun.light_energy = 1.5
-	sun.light_color = Color(1.0, 0.96, 0.88)
-	sun.light_angular_distance = 2.5
+	sun.light_energy = 0.55
+	sun.light_color = Color(1.0, 0.96, 0.86)
+	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
-	sun.shadow_opacity = 0.82
-	sun.shadow_blur = 1.4
+	sun.shadow_opacity = 0.5
+	sun.shadow_blur = 2.0
 	sun.shadow_bias = 0.03
 	sun.directional_shadow_max_distance = 300.0
 	sun.directional_shadow_blend_splits = true
+
+	var fill := DirectionalLight3D.new()
+	fill.name = "FillLight3D"
+	fill.rotation = Vector3(-0.45, 2.4, 0.0)
+	fill.light_energy = 0.12
+	fill.light_color = Color(0.72, 0.85, 1.0)
+	fill.shadow_enabled = false
+	add_child(fill)
 
 	_spawn_clouds()
 	_spawn_aurora_curtains()
@@ -167,16 +187,17 @@ func _ready() -> void:
 
 
 	toon_shader = load("res://toon.gdshader")
-	obstacle_mat = _toon_material(Color(0.50, 0.45, 0.36), 0.92, 0.12)
+	outline_shader = load("res://outline.gdshader")
+	outline_mat = ShaderMaterial.new()
+	outline_mat.shader = outline_shader
+	obstacle_mat = _toon_material(Color(0.86, 0.48, 0.38), 0.06)
 
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = load("res://ground_facets.gdshader")
 
-	ramp_grain_tex = _make_ramp_grain(64)
-
-	ramp_top_mat = _toon_material(Color(0.69, 0.50, 0.32), 0.65, 0.16, Color(0.69, 0.50, 0.32), 0.22)
-	ramp_side_mat = _toon_material(Color(0.33, 0.22, 0.14), 0.88, 0.10, Color(0.33, 0.22, 0.14), 0.12)
-	pole_mat = _toon_material(Color(0.40, 0.36, 0.30), 0.72, 0.12)
+	ramp_top_mat = _toon_material(Color(0.98, 0.82, 0.42), 0.05)
+	ramp_side_mat = _toon_material(Color(0.86, 0.62, 0.34), 0.04)
+	pole_mat = _toon_material(Color(0.80, 0.80, 0.86), 0.06)
 
 	_setup_audio()
 	tcp.connect_to_host(host, port)
@@ -189,35 +210,35 @@ func _draw_minimap() -> void:
 	var scale := (span - pad * 2.0) / maxf(arena, 1.0)
 	var origin := Vector2(sz.x * 0.5, sz.y * 0.5)
 
-	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.07, 0.06, 0.13, 0.82), true)
-	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.68, 0.58, 0.95, 0.70), false, 1.0)
+	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.99, 0.97, 0.93, 0.9), true)
+	minimap.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.45, 0.38, 0.62, 0.6), false, 1.0)
 
 	var field := arena * scale
 	minimap.draw_rect(Rect2(origin - Vector2(field, field) * 0.5, Vector2(field, field)),
-		Color(0.14, 0.13, 0.24, 0.92), true)
+		Color(0.66, 0.87, 0.48, 0.95), true)
 	minimap.draw_rect(Rect2(origin - Vector2(field, field) * 0.5, Vector2(field, field)),
-		Color(0.45, 0.38, 0.68, 0.45), false, 1.0)
+		Color(0.55, 0.45, 0.85, 0.6), false, 1.0)
 
 	for quad in mini_ramps:
 		var pts := PackedVector2Array()
 		for p in quad:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.62, 0.47, 0.78, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.98, 0.82, 0.42, 0.95))
 
 	for poly in mini_obstacles:
 		var pts := PackedVector2Array()
 		for p in poly:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.30, 0.27, 0.42, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.94, 0.50, 0.40, 0.95))
 
 	for team in mini_flags.keys():
 		var fp: Vector2 = mini_flags[team]
 		var col: Color = team_colors.get(team, Color(1, 1, 1))
 		var sp := origin + fp * scale
-		minimap.draw_line(sp + Vector2(0, 2.5), sp + Vector2(0, -7.0), Color(0.95, 0.95, 1.0, 0.95), 1.0)
+		minimap.draw_line(sp + Vector2(0, 2.5), sp + Vector2(0, -7.0), Color(0.3, 0.26, 0.4, 0.95), 1.0)
 		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), col, true)
-		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), Color(0.95, 0.95, 1.0, 0.85), false, 1.0)
-		minimap.draw_circle(sp + Vector2(0, 2.5), 1.2, Color(0.95, 0.95, 1.0, 0.95))
+		minimap.draw_rect(Rect2(sp + Vector2(0.5, -7.0), Vector2(6.0, 4.0)), Color(0.3, 0.26, 0.4, 0.8), false, 1.0)
+		minimap.draw_circle(sp + Vector2(0, 2.5), 1.2, Color(0.3, 0.26, 0.4, 0.95))
 
 	for sid in last_pose.keys():
 		if not last_info.has(sid):
@@ -230,18 +251,17 @@ func _draw_minimap() -> void:
 		var team := String(info.get("team", "?"))
 		var base: Color = team_colors.get(team, Color(1, 1, 1))
 		var hfrac := clampf((pos.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
-		var light := Color.from_hsv(base.h, base.s * 0.38, minf(1.0, base.v * 1.5 + 0.2))
+		var light := Color.from_hsv(base.h, base.s * 0.45, minf(1.0, base.v * 0.75 + 0.15))
 		var col := base.lerp(light, hfrac)
 		var sp := origin + Vector2(pos.x, pos.z) * scale
 		minimap.draw_circle(sp, 4.0, col)
 
 
-func _toon_material(color: Color, material_roughness := 0.72, rim := 0.16,
+func _toon_material(color: Color, rim := 0.08,
 		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = toon_shader
 	mat.set_shader_parameter("base_color", color)
-	mat.set_shader_parameter("roughness", material_roughness)
 	mat.set_shader_parameter("rim_strength", rim)
 	mat.set_shader_parameter("emission_color", emission)
 	mat.set_shader_parameter("emission_strength", emission_strength)
@@ -250,28 +270,28 @@ func _toon_material(color: Color, material_roughness := 0.72, rim := 0.16,
 
 
 func _spawn_clouds() -> void:
-	var cloud_mat := _toon_material(Color(0.95, 0.93, 0.90), 1.0, 0.08, Color(0.95, 0.93, 0.90), 0.16)
+	var cloud_mat := _toon_material(Color(0.95, 0.97, 1.0), 0.02, Color(1, 1, 1), 0.85)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5
 	cloud_root = Node3D.new()
 	cloud_root.name = "Clouds"
 	add_child(cloud_root)
-	for i in range(14):
+	for i in range(20):
 		var ang := rng.randf() * TAU
-		var dist := rng.randf_range(0.0, 480.0)
-		var base_y := rng.randf_range(90.0, 170.0)
+		var dist := rng.randf_range(200.0, 620.0)
+		var base_y := rng.randf_range(130.0, 270.0)
 		var cluster := Node3D.new()
 		cluster.position = Vector3(cos(ang) * dist, base_y, sin(ang) * dist)
 		cloud_root.add_child(cluster)
 		cloud_clusters.append({"node": cluster, "base_y": base_y, "phase": rng.randf() * TAU})
-		for p in range(rng.randi_range(3, 5)):
+		for p in range(rng.randi_range(4, 6)):
 			var mi := MeshInstance3D.new()
 			var sm := SphereMesh.new()
-			sm.radius = rng.randf_range(10.0, 22.0)
-			sm.height = sm.radius * 1.6
-			sm.radial_segments = 8
-			sm.rings = 5
+			sm.radius = rng.randf_range(16.0, 34.0)
+			sm.height = sm.radius * 1.35
+			sm.radial_segments = 10
+			sm.rings = 6
 			mi.mesh = sm
 			mi.material_override = cloud_mat
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -307,9 +327,9 @@ func _spawn_aurora_curtains() -> void:
 		mat.set_shader_parameter("seed", rng.randf() * 50.0)
 		mat.set_shader_parameter("density", rng.randf_range(1.5, 4.0))
 		mat.set_shader_parameter("speed", rng.randf_range(0.08, 0.18))
-		mat.set_shader_parameter("intensity", rng.randf_range(1.0, 1.6))
-		mat.set_shader_parameter("color_a", Color(0.85, 0.32, 0.62))
-		mat.set_shader_parameter("color_b", Color(0.3, 0.78, 0.78))
+		mat.set_shader_parameter("intensity", rng.randf_range(0.4, 0.65))
+		mat.set_shader_parameter("color_a", Color(0.96, 0.72, 0.86))
+		mat.set_shader_parameter("color_b", Color(0.62, 0.88, 0.98))
 		quad.material_override = mat
 		quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		curtain_root.add_child(quad)
@@ -341,7 +361,7 @@ func _add_bg_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, base: Co
 	if n.y < 0.0:
 		n = -n
 	var j := 0.93 + _hash01((a.x + b.x + c.x) * 0.37 + 17.0, (a.z + b.z + c.z) * 0.41 + 23.0) * 0.12
-	var col := Color(base.r * j, base.g * j, base.b * j)
+	var col := Color(base.r * j, base.g * j, base.b * j).srgb_to_linear()
 	st.set_normal(n)
 	st.set_color(col)
 	st.add_vertex(a)
@@ -377,16 +397,16 @@ func _spawn_background() -> void:
 			else:
 				_add_bg_facet(st, p00, p10, p01, base)
 				_add_bg_facet(st, p10, p11, p01, base)
-	var terrain_mat := _toon_material(Color.WHITE, 1.0, 0.08, Color(0.08, 0.13, 0.08), 0.05, true)
+	var terrain_mat := _toon_material(Color.WHITE, 0.03, Color(0.08, 0.13, 0.08), 0.05, true)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = terrain_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	bg_root.add_child(mi)
 
-	var trunk_mat := _toon_material(Color(0.32, 0.22, 0.14), 0.95, 0.10)
-	var canopy_a := _toon_material(Color(0.16, 0.38, 0.16), 0.9, 0.18)
-	var canopy_b := _toon_material(Color(0.24, 0.50, 0.20), 0.9, 0.18)
+	var trunk_mat := _toon_material(Color(0.56, 0.38, 0.26), 0.05)
+	var canopy_a := _toon_material(Color(0.34, 0.66, 0.34), 0.06)
+	var canopy_b := _toon_material(Color(0.44, 0.78, 0.40), 0.06)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 71
@@ -441,22 +461,6 @@ func _make_tree(rng: RandomNumberGenerator, x: float, z: float, ground_h: float,
 	return root
 
 
-func _make_ramp_grain(size: int) -> ImageTexture:
-	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 17
-	for y in range(size):
-		for x in range(size):
-			var fx := float(x) / size
-			var fy := float(y) / size
-			var grain := 0.5 + 0.5 * sin(fy * TAU * 14.0 + sin(fx * TAU * 2.0) * 1.3)
-			var v := 0.84 + grain * 0.1
-			v += rng.randf_range(-0.04, 0.04)
-			v = clampf(v, 0.68, 1.0)
-			img.set_pixel(x, y, Color(v, v, v))
-	return ImageTexture.create_from_image(img)
-
-
 func _setup_audio() -> void:
 	music_player = AudioStreamPlayer.new()
 	var music := load("res://audio/music/ambient_loop.wav") as AudioStreamWAV
@@ -489,7 +493,7 @@ func _setup_audio() -> void:
 
 
 func _setup_camera() -> void:
-	cam_dist = arena * 1.25
+	cam_dist = arena * 1.7
 	cam_target = Vector3.ZERO
 	cam_yaw = 0.0
 	cam_pitch = CAM_PITCH
@@ -586,9 +590,13 @@ func _refresh_order() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and follow_idx < 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		free_yaw -= event.relative.x * LOOK_SENS
-		free_pitch = clampf(free_pitch - event.relative.y * LOOK_SENS, -1.55, 1.55)
+	if event is InputEventMouseMotion:
+		if mouse_reset_frames > 0:
+			mouse_reset_frames -= 1
+			return
+		if follow_idx < 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			free_yaw -= event.relative.x * LOOK_SENS
+			free_pitch = clampf(free_pitch - event.relative.y * LOOK_SENS, -1.55, 1.55)
 	if event is InputEventMouseButton and event.pressed:
 		if follow_idx < 0 and free_cursor_free and event.button_index == MOUSE_BUTTON_LEFT:
 			free_cursor_free = false
@@ -612,10 +620,11 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	if follow_idx < 0 and not match_over:
+	if follow_idx < 0 and not match_over and capture_path == "":
 		var want := Input.MOUSE_MODE_VISIBLE if free_cursor_free else Input.MOUSE_MODE_CAPTURED
 		if Input.mouse_mode != want:
 			Input.mouse_mode = want
+			mouse_reset_frames = 3
 	elif Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_update_agent_poses()
@@ -671,6 +680,21 @@ func _process(delta: float) -> void:
 			retry_in = 1.0
 			hud.text = "waiting for bridge %s:%d ..." % [host, port]
 			tcp.connect_to_host(host, port)
+	if capture_countdown > 0 and have_map:
+		free_yaw = 0.0
+		free_pitch = -cam_pitch
+		capture_countdown -= 1
+		if capture_follow and capture_countdown == 60:
+			_cycle_follow()
+		if capture_countdown == 0:
+			_capture_frame.call_deferred()
+
+
+func _capture_frame() -> void:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.save_png(capture_path)
+	get_tree().quit()
 
 
 func _display_pose(sid: int) -> Array:
@@ -826,7 +850,7 @@ func _build_map(frame: Dictionary) -> void:
 	for t in frame.get("teams", []):
 		var base := Color(String(t.get("color", "#ffffff")))
 		team_colors[String(t.get("name", "?"))] = base
-		var mat := _toon_material(base, 0.55, 0.20)
+		var mat := _toon_material(base, 0.08)
 		team_mats[String(t.get("name", "?"))] = mat
 
 	var half := arena * 0.5
@@ -847,12 +871,12 @@ func _build_map(frame: Dictionary) -> void:
 	glow_mat.set_shader_parameter("plane_size", glow_size)
 	glow_mat.set_shader_parameter("arena_half", half)
 	glow_mat.set_shader_parameter("falloff", 26.0)
-	glow_mat.set_shader_parameter("intensity", 0.16)
+	glow_mat.set_shader_parameter("intensity", 0.10)
 	glow_plane_mi.material_override = glow_mat
 	glow_plane_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	map_root.add_child(glow_plane_mi)
 
-	var border_mat := _toon_material(Color(0.40, 0.37, 0.48), 0.9, 0.15)
+	var border_mat := _toon_material(Color(0.62, 0.50, 0.85), 0.06)
 	for spec in [
 		[Vector3(0, 1, -half), Vector3(arena + 2.0, 2.0, 1.0)],
 		[Vector3(0, 1, half), Vector3(arena + 2.0, 2.0, 1.0)],
@@ -933,20 +957,18 @@ func _ground_height(x: float, z: float) -> float:
 
 func _facet_color(cx: float, cz: float) -> Color:
 	var t := _hash01(cx * 0.07 + 31.0, cz * 0.07 + 31.0)
-	var warm := Color(0.62, 0.78, 0.42)
-	var cool := Color(0.32, 0.62, 0.48)
-	var col := cool.lerp(warm, t)
-	var shade := 0.9 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.22
+	var warm := Color(0.58, 0.82, 0.30)
+	var cool := Color(0.40, 0.72, 0.40)
+	var col := cool.lerp(warm, t * 0.7 + 0.15)
+	var shade := 0.94 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.1
 	return Color(col.r * shade, col.g * shade, col.b * shade)
 
 
 func _add_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
 	var mx := (a.x + b.x + c.x) / 3.0
 	var mz := (a.z + b.z + c.z) / 3.0
-	var col := _facet_color(mx, mz)
-	var phase := _hash01(mx * 1.37 + 3.0, mz * 1.91 + 9.0)
-	var rate := _hash01(mx * 0.73 + 21.0, mz * 2.41 + 17.0)
-	var uv := Vector2(phase, rate)
+	var col := _facet_color(mx, mz).srgb_to_linear()
+	var uv := Vector2(mx, mz)
 	st.set_normal(_face_normal_up(a, b, c))
 	st.set_color(col)
 	st.set_uv(uv)
@@ -1121,7 +1143,17 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	sm.radial_segments = 24
 	sm.rings = 16
 	mi.mesh = sm
-	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.4, 0.35)
+	var outline := MeshInstance3D.new()
+	var osm := SphereMesh.new()
+	osm.radius = sphere_r * 1.07
+	osm.height = sphere_r * 2.14
+	osm.radial_segments = 24
+	osm.rings = 16
+	outline.mesh = osm
+	outline.material_override = outline_mat
+	outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.add_child(outline)
+	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.10)
 	mi.material_override = mat
 	agent_mats[sid] = mat
 	agent_meshes[sid] = mi
@@ -1131,7 +1163,7 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	indicator.position = Vector3(0, sphere_r * 1.9, 0)
 	indicator.visible = false
 
-	var ind_mat := _toon_material(Color.WHITE, 0.6, 0.2, Color.WHITE, 0.35)
+	var ind_mat := _toon_material(Color.WHITE, 0.05, Color.WHITE, 0.35)
 	var ind_chip := MeshInstance3D.new()
 	var ind_chip_mesh := BoxMesh.new()
 	ind_chip_mesh.size = Vector3(0.22, 0.22, 0.04)

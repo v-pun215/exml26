@@ -1,10 +1,11 @@
 shader_type spatial;
+render_mode diffuse_toon, specular_toon, cull_disabled;
+
 uniform vec4 base_color : source_color = vec4(1.0);
 uniform vec4 emission_color : source_color = vec4(0.0);
 uniform float emission_strength : hint_range(0.0, 2.0) = 0.0;
-uniform float roughness : hint_range(0.0, 1.0) = 0.72;
-uniform float rim_strength : hint_range(0.0, 1.0) = 0.16;
-uniform float rim_tint : hint_range(0.0, 1.0) = 0.55;
+uniform float rim_strength : hint_range(0.0, 1.0) = 0.08;
+uniform float rim_tint : hint_range(0.0, 1.0) = 0.5;
 uniform bool use_vertex_color = false;
 
 void fragment() {
@@ -13,7 +14,9 @@ void fragment() {
 		col *= COLOR.rgb;
 	}
 	ALBEDO = col;
-	ROUGHNESS = roughness;
+	METALLIC = 0.0;
+	SPECULAR = 0.0;
+	ROUGHNESS = 1.0;
 	RIM = rim_strength;
 	RIM_TINT = rim_tint;
 	EMISSION = emission_color.rgb * emission_strength;

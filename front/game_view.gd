@@ -85,7 +85,8 @@ var outline_mat: ShaderMaterial
 var blob_shader: Shader
 var blob_mat: ShaderMaterial
 var puff_shader: Shader
-var face_mat: StandardMaterial3D
+var face_shader: Shader
+var ui_font: Font
 var agent_faces := {}
 var agent_limbs := {}
 var agent_blobs := {}
@@ -97,6 +98,7 @@ var capture_path := ""
 var capture_countdown := 0
 var capture_follow := false
 var capture_portrait := false
+var capture_expr := ""
 var capture_lock := false
 
 var agent_grounded := {}
@@ -117,6 +119,8 @@ func _ready() -> void:
 			capture_follow = true
 		elif arg == "--capture-portrait":
 			capture_portrait = true
+		elif arg.begins_with("--expr="):
+			capture_expr = arg.substr(7)
 		elif arg.begins_with("--capture="):
 			capture_path = arg.substr(10)
 			capture_countdown = 90
@@ -172,10 +176,13 @@ func _ready() -> void:
 	blob_mat = ShaderMaterial.new()
 	blob_mat.shader = blob_shader
 	puff_shader = load("res://puff.gdshader")
-	face_mat = StandardMaterial3D.new()
-	face_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	face_mat.albedo_color = Color(0.09, 0.07, 0.17)
-	face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	face_shader = load("res://face.gdshader")
+	var base_font := load("res://fonts/Coolvetica.otf") as FontFile
+	if base_font != null:
+		var tracked := FontVariation.new()
+		tracked.base_font = base_font
+		tracked.spacing_glyph = 2
+		ui_font = tracked
 	obstacle_mat = _toon_material(Color(0.95, 0.42, 0.34), 0.06)
 
 	ground_mat = ShaderMaterial.new()
@@ -195,12 +202,16 @@ func _ready() -> void:
 	hud.position = Vector2(12, 10)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.text = "waiting for bridge..."
+	hud.add_theme_font_override("font", ui_font)
+	hud.add_theme_font_size_override("font_size", 22)
 	layer.add_child(hud)
 	hint_label = Label.new()
-	hint_label.position = Vector2(12, 34)
+	hint_label.position = Vector2(12, 38)
 	hint_label.text = "Enter next bot · Esc free cam"
 	hint_label.modulate = Color(1, 1, 1, 0.55)
 	hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint_label.add_theme_font_override("font", ui_font)
+	hint_label.add_theme_font_size_override("font_size", 16)
 	layer.add_child(hint_label)
 	caption = Label.new()
 	caption.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -209,6 +220,8 @@ func _ready() -> void:
 	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	caption.visible = false
+	caption.add_theme_font_override("font", ui_font)
+	caption.add_theme_font_size_override("font_size", 26)
 	layer.add_child(caption)
 
 	minimap = Control.new()
@@ -718,14 +731,15 @@ func _process(delta: float) -> void:
 		capture_countdown -= 1
 		if capture_follow and capture_countdown == 60:
 			_cycle_follow()
-		if capture_portrait and agent_order.size() > 0 and last_pose.has(agent_order[0]):
-			var pid: int = agent_order[0]
-			var pp: Vector3 = last_pose[pid]["pos"]
-			var pstate: Dictionary = agent_states.get(pid, {})
-			var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
-			camera.position = pp + pfacing * 2.6 + Vector3(0.0, 4.2, 0.0)
-			camera.look_at(pp + Vector3(0.0, 0.6, 0.0), Vector3.UP)
-			capture_lock = true
+		if capture_portrait and agent_order.size() > 0:
+			var pid := _portrait_agent()
+			if pid >= 0 and last_pose.has(pid):
+				var pp: Vector3 = last_pose[pid]["pos"]
+				var pstate: Dictionary = agent_states.get(pid, {})
+				var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
+				camera.position = pp + pfacing * 3.6 + Vector3(0.0, 2.4, 0.0)
+				camera.look_at(pp + Vector3(0.0, 0.75, 0.0), Vector3.UP)
+				capture_lock = true
 		if capture_countdown == 0:
 			_capture_frame.call_deferred()
 
@@ -803,8 +817,9 @@ func _animate_agents(delta: float) -> void:
 		var face: Dictionary = agent_faces.get(sid, {})
 		if not face.is_empty():
 			var face_root := face["root"] as Node3D
-			face_root.basis = Basis.looking_at(-facing, Vector3.UP)
+			face_root.basis = Basis.looking_at(-_head_facing(node, facing), Vector3.UP)
 			face_root.scale = body_scale
+			_drive_expression(sid, state, face_root, node, v, sp, air, delta)
 
 		var limbs: Dictionary = agent_limbs.get(sid, {})
 		if not limbs.is_empty():
@@ -834,6 +849,161 @@ func _animate_agents(delta: float) -> void:
 				Color(tint.r, tint.g, tint.b, 0.28),
 				sphere_r * 1.05, 0.26, Vector3.ZERO, 0.15)
 		state["trail"] = trail_t
+
+
+func _portrait_agent() -> int:
+	var best := -1
+	var best_d := -1.0
+	for sid in last_pose.keys():
+		var p: Vector3 = last_pose[sid]["pos"]
+		var d := 999.0
+		for poly in mini_obstacles:
+			var c := Vector2.ZERO
+			for q in poly:
+				c += q
+			c /= maxf(float(poly.size()), 1.0)
+			d = minf(d, Vector2(p.x - c.x, p.z - c.y).length())
+		if d > best_d:
+			best_d = d
+			best = int(sid)
+	return best
+
+
+func _head_facing(node: Node3D, facing: Vector3) -> Vector3:
+	if camera == null:
+		return facing
+	var to_cam := camera.global_position - node.global_position
+	to_cam.y = 0.0
+	if to_cam.length() < 0.01:
+		return facing
+	to_cam = to_cam.normalized()
+	var away := clampf(-facing.dot(to_cam), 0.0, 1.0)
+	var blend := clampf((away - 0.25) / 0.5, 0.0, 1.0) * 0.8
+	return facing.lerp(to_cam, blend).normalized()
+
+
+func _drive_expression(sid: int, state: Dictionary, face_root: Node3D, node: Node3D,
+		v: Vector3, sp: float, air: float, delta: float) -> void:
+	var face: Dictionary = agent_faces.get(sid, {})
+	var face_mat := face["mat"] as ShaderMaterial
+	if face_mat == null:
+		return
+
+	var carrying := agent_carrying.has(sid)
+	var team := String(last_info[sid].get("team", "")) if last_info.has(sid) else ""
+	var falling := air > 0.12 and v.y < -5.0
+
+	var happy_t := 1.0 if carrying else 0.0
+	var wide_t := 1.0 if falling else 0.0
+	var squint_t := 0.32 if (sp < 1.5 and not carrying) else 0.0
+	var smile_t := 0.18
+	var open_t := 0.0
+	if carrying:
+		smile_t = 1.0
+	elif falling:
+		smile_t = -0.85
+		open_t = 0.55
+
+	if capture_expr != "":
+		happy_t = 0.0
+		wide_t = 0.0
+		squint_t = 0.0
+		smile_t = 0.18
+		open_t = 0.0
+		match capture_expr:
+			"happy":
+				happy_t = 1.0
+				smile_t = 1.0
+			"wide":
+				wide_t = 1.0
+				smile_t = -0.85
+				open_t = 0.55
+			"worried":
+				wide_t = 0.7
+				smile_t = -0.9
+			"arc":
+				happy_t = 1.0
+
+	var blink: float = state["blink"]
+	var phase: float = state["blink_phase"]
+	var timer: float = state["blink_t"] - delta
+	if timer <= 0.0:
+		timer = randf_range(2.4, 6.5)
+		phase = 0.0
+		state["double"] = randf() < 0.22
+	state["blink_t"] = timer
+	if phase >= 0.0:
+		phase += delta
+		var dur := 0.14
+		if phase < dur * 0.35:
+			blink = phase / (dur * 0.35)
+		elif phase < dur * 0.6:
+			blink = 1.0
+		else:
+			blink = clampf(1.0 - (phase - dur * 0.6) / (dur * 0.4), 0.0, 1.0)
+		if phase >= dur:
+			if bool(state.get("double", false)):
+				state["double"] = false
+				phase = 0.0
+			else:
+				phase = -1.0
+				blink = 0.0
+	state["blink_phase"] = phase
+	state["blink"] = blink
+	if capture_expr == "blink":
+		blink = 1.0
+
+	var happy: float = state["happy"]
+	happy = lerpf(happy, happy_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["happy"] = happy
+	var wide: float = state["wide"]
+	wide = lerpf(wide, wide_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["wide"] = wide
+	var squint: float = state["squint"]
+	squint = lerpf(squint, squint_t, clampf(delta * 5.0, 0.0, 1.0))
+	state["squint"] = squint
+	var smile: float = state["smile"]
+	smile = lerpf(smile, smile_t, clampf(delta * 6.0, 0.0, 1.0))
+	state["smile"] = smile
+	var open: float = state["mouth_open"]
+	open = lerpf(open, open_t, clampf(delta * 7.0, 0.0, 1.0))
+	state["mouth_open"] = open
+
+	var look_world := Vector3.ZERO
+	var have_look := false
+	var target_team := team if carrying else _other_team(team)
+	if target_team != "" and flag_nodes.has(target_team):
+		var fn := flag_nodes[target_team] as Node3D
+		if fn != null:
+			look_world = fn.global_position
+			have_look = true
+	if not have_look and sp > 1.0:
+		look_world = node.global_position + Vector3(v.x, 0.0, v.z)
+		have_look = true
+	var look_target := Vector2.ZERO
+	if have_look:
+		var local := face_root.global_transform.affine_inverse() * look_world
+		look_target = Vector2(clampf(local.x, -1.0, 1.0), clampf(local.y, -1.0, 1.0))
+		if look_target.length() > 1.0:
+			look_target = look_target.normalized()
+	var look: Vector2 = state["look"]
+	look = look.lerp(look_target * 0.55, clampf(delta * 7.0, 0.0, 1.0))
+	state["look"] = look
+
+	face_mat.set_shader_parameter("look_offset", look)
+	face_mat.set_shader_parameter("blink", blink)
+	face_mat.set_shader_parameter("happy", happy)
+	face_mat.set_shader_parameter("wide", wide)
+	face_mat.set_shader_parameter("squint", squint)
+	face_mat.set_shader_parameter("smile", smile)
+	face_mat.set_shader_parameter("mouth_open", open)
+
+
+func _other_team(team: String) -> String:
+	for t in team_colors.keys():
+		if t != team:
+			return t
+	return team
 
 
 func _spawn_dust(pos: Vector3, dir: Vector3) -> void:
@@ -1279,23 +1449,15 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	root.add_child(mi)
 
 	var face_root := Node3D.new()
-	var eye_mesh := SphereMesh.new()
-	eye_mesh.radius = sphere_r * 0.21
-	eye_mesh.height = sphere_r * 0.42
-	eye_mesh.radial_segments = 18
-	eye_mesh.rings = 10
-	for sx in [-1.0, 1.0]:
-		var eye := MeshInstance3D.new()
-		eye.mesh = eye_mesh
-		var edir := Vector3(sx * 0.42, 0.34, 0.84).normalized()
-		eye.position = edir * sphere_r * 0.92
-		eye.basis = Basis.looking_at(-edir, Vector3.UP)
-		eye.scale = Vector3(1.0, 1.18, 0.36)
-		eye.material_override = face_mat
-		eye.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		face_root.add_child(eye)
+	var face_mi := MeshInstance3D.new()
+	face_mi.mesh = _make_face_patch(sphere_r)
+	var face_copy := ShaderMaterial.new()
+	face_copy.shader = face_shader
+	face_mi.material_override = face_copy
+	face_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	face_root.add_child(face_mi)
 	root.add_child(face_root)
-	agent_faces[sid] = {"root": face_root}
+	agent_faces[sid] = {"root": face_root, "mat": face_copy}
 
 	var limb_root := Node3D.new()
 	var limb_mesh := CapsuleMesh.new()
@@ -1350,8 +1512,49 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	root.add_child(indicator)
 	agent_carry_indicators[sid] = {"root": indicator, "mat": ind_mat, "base_y": sphere_r * 1.9}
 	agent_states[sid] = {"facing": Vector3.FORWARD, "squash": 0.0, "prev_vy": 0.0,
-		"trail": 0.0, "phase": 0.0}
+		"trail": 0.0, "phase": 0.0, "blink": 0.0, "blink_phase": -1.0,
+		"blink_t": randf_range(0.6, 4.0), "double": false, "happy": 0.0,
+		"wide": 0.0, "squint": 0.0, "smile": 0.18, "mouth_open": 0.0,
+		"look": Vector2.ZERO}
 	return root
+
+
+func _make_face_patch(radius: float) -> ArrayMesh:
+	var extent := 0.95
+	var res := 12
+	var r := radius * 1.012
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for iy in range(res):
+		for ix in range(res):
+			var u0 := lerpf(-1.0, 1.0, float(ix) / float(res))
+			var u1 := lerpf(-1.0, 1.0, float(ix + 1) / float(res))
+			var v0 := lerpf(-1.0, 1.0, float(iy) / float(res))
+			var v1 := lerpf(-1.0, 1.0, float(iy + 1) / float(res))
+			var a := _face_point(r, extent, Vector2(u0, v0))
+			var b := _face_point(r, extent, Vector2(u1, v0))
+			var c := _face_point(r, extent, Vector2(u1, v1))
+			var d := _face_point(r, extent, Vector2(u0, v1))
+			_add_face_tri(st, a, b, c, Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1))
+			_add_face_tri(st, a, c, d, Vector2(u0, v0), Vector2(u1, v1), Vector2(u0, v1))
+	return st.commit()
+
+
+func _face_point(radius: float, extent: float, uv2: Vector2) -> Vector3:
+	var local := uv2 * extent
+	var theta := local.length()
+	if theta < 0.0001:
+		return Vector3(0.0, 0.0, radius)
+	var tangent := Vector3(local.x, local.y, 0.0).normalized()
+	return (Vector3(0.0, 0.0, 1.0) * cos(theta) + tangent * sin(theta)).normalized() * radius
+
+
+func _add_face_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+	for pair in [[a, ua], [b, ub], [c, uc]]:
+		st.set_normal((pair[0] as Vector3).normalized())
+		st.set_uv((pair[1] as Vector2) * 0.5 + Vector2(0.5, 0.5))
+		st.add_vertex(pair[0])
 
 
 func _make_flag(f: Dictionary) -> Node3D:
@@ -1433,6 +1636,7 @@ func _show_game_over(frame: Dictionary) -> void:
 		var over := Label.new()
 		over.text = "MATCH COMPLETE"
 		var over_ls := LabelSettings.new()
+		over_ls.font = ui_font
 		over_ls.font_size = 28
 		over_ls.font_color = Color(0.8, 0.82, 0.95, 0.7)
 		over.label_settings = over_ls
@@ -1441,6 +1645,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		winner_label = Label.new()
 		go_winner_ls = LabelSettings.new()
+		go_winner_ls.font = ui_font
 		go_winner_ls.font_size = 84
 		go_winner_ls.outline_size = 16
 		go_winner_ls.outline_color = Color(0.02, 0.02, 0.06, 0.95)
@@ -1453,6 +1658,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		sub_label = Label.new()
 		var sub_ls := LabelSettings.new()
+		sub_ls.font = ui_font
 		sub_ls.font_size = 26
 		sub_ls.font_color = Color(0.9, 0.9, 0.98, 0.85)
 		sub_label.label_settings = sub_ls
@@ -1472,6 +1678,7 @@ func _show_game_over(frame: Dictionary) -> void:
 
 		foot_label = Label.new()
 		var foot_ls := LabelSettings.new()
+		foot_ls.font = ui_font
 		foot_ls.font_size = 16
 		foot_ls.font_color = Color(1, 1, 1, 0.45)
 		foot_label.label_settings = foot_ls
@@ -1509,6 +1716,7 @@ func _show_game_over(frame: Dictionary) -> void:
 		var lbl := Label.new()
 		lbl.text = "%s    %d" % [e[0].to_upper(), e[1]]
 		var ls := LabelSettings.new()
+		ls.font = ui_font
 		ls.font_size = 22
 		ls.font_color = Color(0.95, 0.95, 1.0, 0.9)
 		lbl.label_settings = ls

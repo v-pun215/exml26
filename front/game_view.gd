@@ -15,8 +15,8 @@ var have_map := false
 const CAM_PITCH := 0.96
 const CAM_FOV := 50.0
 const LOOK_SENS := 0.0028
-const COL_GRASS_A := Color(0.30, 0.60, 0.44)
-const COL_GRASS_B := Color(0.38, 0.70, 0.50)
+const COL_GRASS_A := Color(0.24, 0.48, 0.52)
+const COL_GRASS_B := Color(0.30, 0.56, 0.58)
 const VIEW_VERSION := 9
 
 var cam_target := Vector3.ZERO
@@ -129,7 +129,7 @@ func _ready() -> void:
 		sun.name = "DirectionalLight3D"
 		add_child(sun)
 	sun.rotation = Vector3(-0.9, -0.6, 0.0)
-	sun.light_energy = 0.8
+	sun.light_energy = 0.85
 	sun.light_color = Color(1.0, 0.96, 0.86)
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
@@ -151,14 +151,14 @@ func _ready() -> void:
 	outline_shader = load("res://outline.gdshader")
 	outline_mat = ShaderMaterial.new()
 	outline_mat.shader = outline_shader
-	obstacle_mat = _toon_material(Color(0.86, 0.48, 0.38), 0.06)
+	obstacle_mat = _toon_material(Color(0.95, 0.42, 0.34), 0.06)
 
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = load("res://ground_facets.gdshader")
 
-	ramp_top_mat = _toon_material(Color(0.99, 0.66, 0.82), 0.05, Color(0, 0, 0), 0.0, false, false)
-	ramp_side_mat = _toon_material(Color(0.88, 0.46, 0.66), 0.04, Color(0, 0, 0), 0.0, false, false)
-	pole_mat = _toon_material(Color(0.80, 0.80, 0.86), 0.06)
+	ramp_top_mat = _toon_material(Color(1.0, 0.5, 0.74), 0.05, Color(0, 0, 0), 0.0, false, false)
+	ramp_side_mat = _toon_material(Color(0.86, 0.34, 0.58), 0.04, Color(0, 0, 0), 0.0, false, false)
+	pole_mat = _toon_material(Color(0.86, 0.86, 0.92), 0.06)
 
 	_spawn_clouds()
 	_spawn_aurora_curtains()
@@ -329,9 +329,9 @@ func _spawn_aurora_curtains() -> void:
 		mat.set_shader_parameter("seed", rng.randf() * 50.0)
 		mat.set_shader_parameter("density", rng.randf_range(1.5, 4.0))
 		mat.set_shader_parameter("speed", rng.randf_range(0.08, 0.18))
-		mat.set_shader_parameter("intensity", rng.randf_range(0.4, 0.65))
-		mat.set_shader_parameter("color_a", Color(0.96, 0.72, 0.86))
-		mat.set_shader_parameter("color_b", Color(0.62, 0.88, 0.98))
+		mat.set_shader_parameter("intensity", rng.randf_range(0.15, 0.3))
+		mat.set_shader_parameter("color_a", Color(0.72, 0.88, 1.0))
+		mat.set_shader_parameter("color_b", Color(0.92, 0.86, 1.0))
 		quad.material_override = mat
 		quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		curtain_root.add_child(quad)
@@ -406,9 +406,9 @@ func _spawn_background() -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	bg_root.add_child(mi)
 
-	var trunk_mat := _toon_material(Color(0.56, 0.38, 0.26), 0.05)
-	var canopy_a := _toon_material(Color(0.34, 0.66, 0.34), 0.06)
-	var canopy_b := _toon_material(Color(0.44, 0.78, 0.40), 0.06)
+	var trunk_mat := _toon_material(Color(0.52, 0.34, 0.22), 0.05)
+	var canopy_a := _toon_material(Color(0.22, 0.58, 0.26), 0.06)
+	var canopy_b := _toon_material(Color(0.32, 0.72, 0.32), 0.06)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 71
@@ -878,7 +878,7 @@ func _build_map(frame: Dictionary) -> void:
 	glow_plane_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	map_root.add_child(glow_plane_mi)
 
-	var border_mat := _toon_material(Color(0.62, 0.50, 0.85), 0.06)
+	var border_mat := _toon_material(Color(0.58, 0.42, 0.88), 0.06)
 	for spec in [
 		[Vector3(0, 1, -half), Vector3(arena + 2.0, 2.0, 1.0)],
 		[Vector3(0, 1, half), Vector3(arena + 2.0, 2.0, 1.0)],
@@ -951,38 +951,6 @@ func _face_normal_up(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
 	return n
 
 
-func _ground_height(x: float, z: float) -> float:
-	var broad := _hash01(x * 0.035, z * 0.035) * 0.06
-	var fine := _hash01(x * 0.21 + 11.0, z * 0.21 + 11.0) * 0.02
-	return -(broad + fine)
-
-
-func _facet_color(cx: float, cz: float) -> Color:
-	var t := _hash01(cx * 0.07 + 31.0, cz * 0.07 + 31.0)
-	var warm := Color(0.58, 0.82, 0.30)
-	var cool := Color(0.40, 0.72, 0.40)
-	var col := cool.lerp(warm, t * 0.45 + 0.28)
-	var shade := 0.96 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.08
-	return Color(col.r * shade, col.g * shade, col.b * shade)
-
-
-func _add_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var mx := (a.x + b.x + c.x) / 3.0
-	var mz := (a.z + b.z + c.z) / 3.0
-	var col := _facet_color(mx, mz).srgb_to_linear()
-	var uv := Vector2(mx, mz)
-	st.set_normal(_face_normal_up(a, b, c))
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(a)
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(b)
-	st.set_color(col)
-	st.set_uv(uv)
-	st.add_vertex(c)
-
-
 func _make_ground_mesh(size: float, divisions: int) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -994,21 +962,19 @@ func _make_ground_mesh(size: float, divisions: int) -> MeshInstance3D:
 			var x1 := x0 + step
 			var z0 := -half + float(iz) * step
 			var z1 := z0 + step
-
-			var p00 := Vector3(x0, _ground_height(x0, z0), z0)
-			var p10 := Vector3(x1, _ground_height(x1, z0), z0)
-			var p11 := Vector3(x1, _ground_height(x1, z1), z1)
-			var p01 := Vector3(x0, _ground_height(x0, z1), z1)
-
-			if _hash01(float(ix) * 3.7, float(iz) * 5.1) < 0.5:
-				_add_facet(st, p00, p10, p11)
-				_add_facet(st, p00, p11, p01)
-			else:
-				_add_facet(st, p00, p10, p01)
-				_add_facet(st, p10, p11, p01)
+			_add_ground_quad(st,
+				Vector3(x0, 0.0, z0), Vector3(x1, 0.0, z0),
+				Vector3(x1, 0.0, z1), Vector3(x0, 0.0, z1))
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	return mi
+
+
+func _add_ground_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	for v in [a, b, c, a, c, d]:
+		st.set_normal(Vector3.UP)
+		st.set_uv(Vector2(v.x, v.z))
+		st.add_vertex(v)
 
 
 func _prism(points: Array, height: float) -> MeshInstance3D:

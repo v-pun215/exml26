@@ -85,6 +85,7 @@ var outline_mat: ShaderMaterial
 var blob_shader: Shader
 var blob_mat: ShaderMaterial
 var face_shader: Shader
+var ramp_shader: Shader
 var streak_shader: Shader
 var ring_shader: Shader
 var puff_shader: Shader
@@ -97,6 +98,7 @@ var agent_states := {}
 var fx_root: Node3D
 var puff_root: Node3D
 var puffs: Array = []
+var map_ramps: Array = []
 
 var capture_path := ""
 var capture_countdown := 0
@@ -186,6 +188,7 @@ func _ready() -> void:
 	blob_mat = ShaderMaterial.new()
 	blob_mat.shader = blob_shader
 	face_shader = load("res://face.gdshader")
+	ramp_shader = load("res://ramp.gdshader")
 	streak_shader = load("res://streak.gdshader")
 	ring_shader = load("res://ring.gdshader")
 	puff_shader = load("res://puff.gdshader")
@@ -195,13 +198,14 @@ func _ready() -> void:
 		tracked.base_font = base_font
 		tracked.spacing_glyph = 2
 		ui_font = tracked
-	obstacle_mat = _toon_material(Color(0.95, 0.42, 0.34), 0.06)
+	obstacle_mat = _toon_material(Color.WHITE, 0.06, Color(0, 0, 0), 0.0, true)
 
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = load("res://ground_facets.gdshader")
 
-	ramp_top_mat = _toon_material(Color(1.0, 0.5, 0.74), 0.05, Color(0, 0, 0), 0.0, false, false)
-	ramp_side_mat = _toon_material(Color(0.86, 0.34, 0.58), 0.04, Color(0, 0, 0), 0.0, false, false)
+	ramp_top_mat = ShaderMaterial.new()
+	ramp_top_mat.shader = ramp_shader
+	ramp_side_mat = _toon_material(Color(0.70, 0.50, 0.30), 0.04, Color(0.80, 0.58, 0.34), 0.16, false, false)
 	pole_mat = _toon_material(Color(0.86, 0.86, 0.92), 0.06)
 
 	_spawn_clouds()
@@ -272,7 +276,7 @@ func _draw_minimap() -> void:
 		var pts := PackedVector2Array()
 		for p in quad:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.99, 0.62, 0.80, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.99, 0.80, 0.40, 0.95))
 
 	for poly in mini_obstacles:
 		var pts := PackedVector2Array()
@@ -746,14 +750,26 @@ func _process(delta: float) -> void:
 		if capture_follow and capture_countdown == 60:
 			_cycle_follow()
 		if capture_portrait and agent_order.size() > 0:
-			var pid := _portrait_agent()
-			if pid >= 0 and last_pose.has(pid):
-				var pp: Vector3 = last_pose[pid]["pos"]
-				var pstate: Dictionary = agent_states.get(pid, {})
-				var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
-				camera.position = pp + pfacing * 3.6 + Vector3(0.0, 2.4, 0.0)
-				camera.look_at(pp + Vector3(0.0, 0.75, 0.0), Vector3.UP)
+			var framed := false
+			if capture_expr == "ramp" and map_ramps.size() > 0:
+				var rp: Dictionary = map_ramps[0]
+				var rc: Vector2 = rp["c"]
+				var rd: Vector2 = rp["d"]
+				var side := Vector2(-rd.y, rd.x)
+				var base := Vector3(rc.x, 0.0, rc.y)
+				camera.position = base + Vector3(side.x, 0.0, side.y) * 16.0 + Vector3(0.0, 5.0, 0.0)
+				camera.look_at(base + Vector3(0.0, 1.5, 0.0), Vector3.UP)
 				capture_lock = true
+				framed = true
+			if not framed:
+				var pid := _portrait_agent()
+				if pid >= 0 and last_pose.has(pid):
+					var pp: Vector3 = last_pose[pid]["pos"]
+					var pstate: Dictionary = agent_states.get(pid, {})
+					var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
+					camera.position = pp + pfacing * 3.6 + Vector3(0.0, 2.4, 0.0)
+					camera.look_at(pp + Vector3(0.0, 0.75, 0.0), Vector3.UP)
+					capture_lock = true
 		if capture_countdown == 0:
 			_capture_frame.call_deferred()
 
@@ -1365,7 +1381,10 @@ func _build_map(frame: Dictionary) -> void:
 		var rdy := float(r.get("dy", 0.0))
 		var rlen := float(r.get("length", 10.0))
 		var rwid := float(r.get("width", 5.0))
-		map_root.add_child(_wedge(rcx, rcy, rdx, rdy, rlen, rwid, float(r.get("height", 3.0))))
+		var rhei := float(r.get("height", 3.0))
+		map_ramps.append({"c": Vector2(rcx, rcy), "d": Vector2(rdx, rdy),
+			"len": rlen, "wid": rwid, "hei": rhei})
+		map_root.add_child(_wedge(rcx, rcy, rdx, rdy, rlen, rwid, rhei))
 		var dir := Vector2(rdx, rdy).normalized()
 		var side := Vector2(-dir.y, dir.x)
 		var ctr := Vector2(rcx, rcy)
@@ -1390,7 +1409,7 @@ func _hash01(x: float, z: float) -> float:
 
 
 func _rock_height(x: float, z: float, base_height: float) -> float:
-	return base_height * (1.0 + _hash01(x * 0.6, z * 0.6) * 0.3)
+	return base_height * (1.0 + _hash01(x * 0.6, z * 0.6) * 0.14)
 
 
 func _face_normal_up(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
@@ -1438,6 +1457,8 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 		var empty := MeshInstance3D.new()
 		empty.mesh = ArrayMesh.new()
 		return empty
+	var top_col := Color(0.99, 0.58, 0.48).srgb_to_linear()
+	var side_col := Color(0.78, 0.29, 0.23).srgb_to_linear()
 	var cx := 0.0
 	var cz := 0.0
 	for p in points:
@@ -1461,19 +1482,28 @@ func _prism(points: Array, height: float) -> MeshInstance3D:
 		var a1 := Vector3(ax, _rock_height(ax, az, height), az)
 		var b1 := Vector3(bx, _rock_height(bx, bz, height), bz)
 		st.set_normal(normal)
+		st.set_color(side_col)
 		st.add_vertex(a0)
+		st.set_color(side_col)
 		st.add_vertex(b0)
+		st.set_color(side_col)
 		st.add_vertex(b1)
+		st.set_color(side_col)
 		st.add_vertex(a0)
+		st.set_color(side_col)
 		st.add_vertex(b1)
+		st.set_color(side_col)
 		st.add_vertex(a1)
 	var c := Vector3(cx, _rock_height(cx, cz, height), cz)
 	for i in range(n):
 		var a := Vector3(float(points[i][0]), _rock_height(float(points[i][0]), float(points[i][1]), height), float(points[i][1]))
 		var b := Vector3(float(points[(i + 1) % n][0]), _rock_height(float(points[(i + 1) % n][0]), float(points[(i + 1) % n][1]), height), float(points[(i + 1) % n][1]))
 		st.set_normal(_face_normal_up(c, a, b))
+		st.set_color(top_col)
 		st.add_vertex(c)
+		st.set_color(top_col)
 		st.add_vertex(a)
+		st.set_color(top_col)
 		st.add_vertex(b)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()

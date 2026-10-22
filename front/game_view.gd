@@ -82,10 +82,22 @@ var map_glow_shader: Shader
 var toon_shader: Shader
 var outline_shader: Shader
 var outline_mat: ShaderMaterial
+var blob_shader: Shader
+var blob_mat: ShaderMaterial
+var puff_shader: Shader
+var face_mat: StandardMaterial3D
+var agent_faces := {}
+var agent_limbs := {}
+var agent_blobs := {}
+var agent_states := {}
+var puff_root: Node3D
+var puffs: Array = []
 
 var capture_path := ""
 var capture_countdown := 0
 var capture_follow := false
+var capture_portrait := false
+var capture_lock := false
 
 var agent_grounded := {}
 var agent_carrying := {}
@@ -103,6 +115,8 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--capture-follow":
 			capture_follow = true
+		elif arg == "--capture-portrait":
+			capture_portrait = true
 		elif arg.begins_with("--capture="):
 			capture_path = arg.substr(10)
 			capture_countdown = 90
@@ -115,6 +129,9 @@ func _ready() -> void:
 	bg_root = Node3D.new()
 	bg_root.name = "Background"
 	add_child(bg_root)
+	puff_root = Node3D.new()
+	puff_root.name = "Puffs"
+	add_child(puff_root)
 
 	camera = get_node_or_null("Camera3D") as Camera3D
 	if camera == null:
@@ -151,6 +168,14 @@ func _ready() -> void:
 	outline_shader = load("res://outline.gdshader")
 	outline_mat = ShaderMaterial.new()
 	outline_mat.shader = outline_shader
+	blob_shader = load("res://blob.gdshader")
+	blob_mat = ShaderMaterial.new()
+	blob_mat.shader = blob_shader
+	puff_shader = load("res://puff.gdshader")
+	face_mat = StandardMaterial3D.new()
+	face_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	face_mat.albedo_color = Color(0.09, 0.07, 0.17)
+	face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	obstacle_mat = _toon_material(Color(0.95, 0.42, 0.34), 0.06)
 
 	ground_mat = ShaderMaterial.new()
@@ -514,6 +539,8 @@ func _follow_zoom() -> float:
 
 
 func _update_camera() -> void:
+	if capture_lock:
+		return
 	if follow_idx >= 0 and follow_idx < agent_order.size() and last_pose.has(agent_order[follow_idx]):
 		var st: Dictionary = last_pose[agent_order[follow_idx]]
 		follow_pos = st["pos"]
@@ -525,10 +552,12 @@ func _update_camera() -> void:
 
 
 func _place_follow_cam() -> void:
+	if capture_lock:
+		return
 	var fwd := Vector3(sin(follow_yaw), 0, cos(follow_yaw))
 	var zf := _follow_zoom()
-	camera.position = follow_pos - fwd * (9.0 * zf) + Vector3(0, 5.0 * zf, 0)
-	camera.look_at(follow_pos + fwd * (4.0 * zf) + Vector3(0, 2.2 * zf, 0))
+	camera.position = follow_pos - fwd * (8.5 * zf) + Vector3(0, 4.2 * zf, 0)
+	camera.look_at(follow_pos + Vector3(0, 1.8 * zf, 0))
 
 
 func _agent_tag(sid: int) -> String:
@@ -666,7 +695,8 @@ func _process(delta: float) -> void:
 			free_cursor_free = not free_cursor_free
 	esc_was = esc_now
 	_roll_agents(delta)
-	_squash_agents()
+	_animate_agents(delta)
+	_update_puffs(delta)
 	_drift_clouds(delta)
 	_sway_flags(delta)
 	_spin_carry_indicators(delta)
@@ -688,6 +718,14 @@ func _process(delta: float) -> void:
 		capture_countdown -= 1
 		if capture_follow and capture_countdown == 60:
 			_cycle_follow()
+		if capture_portrait and agent_order.size() > 0 and last_pose.has(agent_order[0]):
+			var pid: int = agent_order[0]
+			var pp: Vector3 = last_pose[pid]["pos"]
+			var pstate: Dictionary = agent_states.get(pid, {})
+			var pfacing: Vector3 = pstate.get("facing", Vector3.FORWARD)
+			camera.position = pp + pfacing * 2.6 + Vector3(0.0, 4.2, 0.0)
+			camera.look_at(pp + Vector3(0.0, 0.6, 0.0), Vector3.UP)
+			capture_lock = true
 		if capture_countdown == 0:
 			_capture_frame.call_deferred()
 
@@ -728,14 +766,127 @@ func _update_agent_poses() -> void:
 			(agent_mats[sid] as ShaderMaterial).set_shader_parameter("base_color", base.lerp(Color(1, 1, 1), hfrac * 0.85))
 
 
-func _squash_agents() -> void:
-	for sid in agent_meshes.keys():
-		var mesh := agent_meshes[sid] as MeshInstance3D
-		if mesh == null or not agent_vel.has(sid):
+func _animate_agents(delta: float) -> void:
+	for sid in agent_states.keys():
+		var state: Dictionary = agent_states[sid]
+		var node := sphere_nodes.get(sid, null) as Node3D
+		if node == null:
 			continue
-		var vz: float = (agent_vel[sid] as Vector3).y
-		var s := clampf(vz * 0.025, -0.22, 0.22)
-		mesh.scale = Vector3(1.0 - s * 0.5, 1.0 + s, 1.0 - s * 0.5)
+		var v: Vector3 = agent_vel.get(sid, Vector3.ZERO)
+		var sp := Vector2(v.x, v.z).length()
+
+		var facing: Vector3 = state["facing"]
+		if sp > 0.6:
+			var want := Vector3(v.x, 0.0, v.z).normalized()
+			facing = facing.lerp(want, clampf(delta * 9.0, 0.0, 1.0)).normalized()
+		state["facing"] = facing
+
+		var prev_vy: float = state["prev_vy"]
+		var grounded := node.position.y <= sphere_r * 1.08
+		var squash: float = state["squash"]
+		if grounded and prev_vy < -4.0:
+			squash = clampf(-prev_vy * 0.06, 0.3, 1.0)
+			_spawn_dust(node.position, Vector3(v.x, 0.0, v.z))
+		state["prev_vy"] = v.y
+		squash = move_toward(squash, 0.0, delta * 3.4)
+		state["squash"] = squash
+
+		var air := clampf((node.position.y - sphere_r) / maxf(jump_h, 0.01), 0.0, 1.0)
+		var body_scale := Vector3(
+			1.0 - air * 0.07 + squash * 0.38,
+			1.0 + air * 0.14 - squash * 0.44,
+			1.0 - air * 0.07 + squash * 0.38)
+		var mesh := agent_meshes.get(sid, null) as MeshInstance3D
+		if mesh != null:
+			mesh.scale = body_scale
+
+		var face: Dictionary = agent_faces.get(sid, {})
+		if not face.is_empty():
+			var face_root := face["root"] as Node3D
+			face_root.basis = Basis.looking_at(-facing, Vector3.UP)
+			face_root.scale = body_scale
+
+		var limbs: Dictionary = agent_limbs.get(sid, {})
+		if not limbs.is_empty():
+			var limb_root := limbs["root"] as Node3D
+			limb_root.basis = Basis.looking_at(-facing, Vector3.UP)
+			var phase: float = state.get("phase", 0.0)
+			var swing := sin(phase) * clampf(sp * 0.07, 0.0, 1.0)
+			(limbs["leg_l"] as Node3D).rotation.x = swing * 0.85
+			(limbs["leg_r"] as Node3D).rotation.x = -swing * 0.85
+			(limbs["arm_l"] as Node3D).rotation.x = -swing * 0.65
+			(limbs["arm_r"] as Node3D).rotation.x = swing * 0.65
+
+		var blob: Dictionary = agent_blobs.get(sid, {})
+		if not blob.is_empty():
+			var blob_node := blob["node"] as MeshInstance3D
+			var blob_copy := blob["mat"] as ShaderMaterial
+			blob_node.position = Vector3(0.0, 0.06 - node.position.y, 0.0)
+			blob_node.scale = Vector3.ONE * (1.0 + air * 0.5)
+			blob_copy.set_shader_parameter("blob_color", Color(0.09, 0.13, 0.1, 0.5 - air * 0.28))
+
+		var trail_t: float = state["trail"] - delta
+		if sp > 8.0 and trail_t <= 0.0:
+			trail_t = 0.06
+			var team := String(last_info.get(sid, {}).get("team", "?")) if last_info.has(sid) else "?"
+			var tint: Color = team_colors.get(team, Color(1, 1, 1))
+			_spawn_puff(node.position - facing * sphere_r * 0.95,
+				Color(tint.r, tint.g, tint.b, 0.28),
+				sphere_r * 1.05, 0.26, Vector3.ZERO, 0.15)
+		state["trail"] = trail_t
+
+
+func _spawn_dust(pos: Vector3, dir: Vector3) -> void:
+	var base := pos + Vector3(0.0, -sphere_r * 0.8, 0.0)
+	for i in range(6):
+		var a := TAU * float(i) / 6.0 + randf() * 0.6
+		var off := Vector3(cos(a), 0.0, sin(a)) * sphere_r
+		_spawn_puff(base + off, Color(1.0, 0.97, 0.88, 0.6),
+			sphere_r * 1.1, 0.42, off.normalized() * 2.4 + Vector3(0.0, 1.2, 0.0), 1.3)
+
+
+func _spawn_puff(pos: Vector3, color: Color, size: float, life: float,
+		vel: Vector3, growth: float) -> void:
+	if puffs.size() > 160:
+		return
+	var mi := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	mi.mesh = quad
+	var mat := ShaderMaterial.new()
+	mat.shader = puff_shader
+	mat.set_shader_parameter("puff_color", color)
+	mat.set_shader_parameter("alpha", 1.0)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.global_position = pos
+	puff_root.add_child(mi)
+	puffs.append({"node": mi, "mat": mat, "vel": vel, "life": life, "max": life,
+		"growth": growth, "size": size})
+
+
+func _update_puffs(delta: float) -> void:
+	var i := puffs.size() - 1
+	while i >= 0:
+		var p: Dictionary = puffs[i]
+		var life: float = p["life"] - delta
+		var node := p["node"] as MeshInstance3D
+		if life <= 0.0 or node == null:
+			if node != null:
+				node.queue_free()
+			puffs.remove_at(i)
+			i -= 1
+			continue
+		p["life"] = life
+		var t := 1.0 - life / float(p["max"])
+		var mat := p["mat"] as ShaderMaterial
+		mat.set_shader_parameter("alpha", pow(1.0 - t, 1.4))
+		node.global_position += (p["vel"] as Vector3) * delta
+		var s := float(p["size"]) * (1.0 + float(p["growth"]) * t)
+		node.scale = Vector3(s, s, s)
+		if camera != null:
+			node.look_at(camera.global_position, Vector3.UP)
+		i -= 1
 
 
 func _spin_carry_indicators(_delta: float) -> void:
@@ -775,7 +926,11 @@ func _roll_agents(delta: float) -> void:
 		if sp < 0.05:
 			continue
 		var axis := Vector3(v.z, 0, -v.x).normalized()
-		(agent_meshes[sid] as MeshInstance3D).rotate(axis, sp * delta / maxf(sphere_r, 0.01))
+		var amount := sp * delta / maxf(sphere_r, 0.01)
+		(agent_meshes[sid] as MeshInstance3D).rotate(axis, amount)
+		var state: Dictionary = agent_states.get(sid, {})
+		if not state.is_empty():
+			state["phase"] = float(state.get("phase", 0.0)) + amount
 
 
 func _pump() -> void:
@@ -817,6 +972,7 @@ func _clear(node: Node3D) -> void:
 func _build_map(frame: Dictionary) -> void:
 	_clear(map_root)
 	_clear(agent_root)
+	_clear(puff_root)
 	sphere_nodes.clear()
 	flag_nodes.clear()
 	flag_banners.clear()
@@ -826,6 +982,11 @@ func _build_map(frame: Dictionary) -> void:
 	agent_order.clear()
 	agent_grounded.clear()
 	agent_carrying.clear()
+	agent_faces.clear()
+	agent_limbs.clear()
+	agent_blobs.clear()
+	agent_states.clear()
+	puffs.clear()
 	last_score.clear()
 	follow_idx = -1
 	_refresh_caption()
@@ -1117,6 +1278,63 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	agent_meshes[sid] = mi
 	root.add_child(mi)
 
+	var face_root := Node3D.new()
+	var eye_mesh := SphereMesh.new()
+	eye_mesh.radius = sphere_r * 0.21
+	eye_mesh.height = sphere_r * 0.42
+	eye_mesh.radial_segments = 18
+	eye_mesh.rings = 10
+	for sx in [-1.0, 1.0]:
+		var eye := MeshInstance3D.new()
+		eye.mesh = eye_mesh
+		var edir := Vector3(sx * 0.42, 0.34, 0.84).normalized()
+		eye.position = edir * sphere_r * 0.92
+		eye.basis = Basis.looking_at(-edir, Vector3.UP)
+		eye.scale = Vector3(1.0, 1.18, 0.36)
+		eye.material_override = face_mat
+		eye.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		face_root.add_child(eye)
+	root.add_child(face_root)
+	agent_faces[sid] = {"root": face_root}
+
+	var limb_root := Node3D.new()
+	var limb_mesh := CapsuleMesh.new()
+	limb_mesh.radius = sphere_r * 0.14
+	limb_mesh.height = sphere_r * 0.62
+	limb_mesh.radial_segments = 10
+	limb_mesh.rings = 4
+	var arm_l := MeshInstance3D.new()
+	var arm_r := MeshInstance3D.new()
+	var leg_l := MeshInstance3D.new()
+	var leg_r := MeshInstance3D.new()
+	for part in [arm_l, arm_r, leg_l, leg_r]:
+		part.mesh = limb_mesh
+		part.material_override = mat
+		part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		limb_root.add_child(part)
+	arm_l.position = Vector3(-0.76, -0.05, 0.06) * sphere_r
+	arm_r.position = Vector3(0.76, -0.05, 0.06) * sphere_r
+	arm_l.rotation = Vector3(0.0, 0.0, PI - 0.22)
+	arm_r.rotation = Vector3(0.0, 0.0, PI + 0.22)
+	leg_l.position = Vector3(-0.30, -0.74, 0.0) * sphere_r
+	leg_r.position = Vector3(0.30, -0.74, 0.0) * sphere_r
+	leg_l.rotation = Vector3(0.0, 0.0, PI - 0.30)
+	leg_r.rotation = Vector3(0.0, 0.0, PI + 0.30)
+	root.add_child(limb_root)
+	agent_limbs[sid] = {"root": limb_root, "arm_l": arm_l, "arm_r": arm_r,
+		"leg_l": leg_l, "leg_r": leg_r}
+
+	var blob := MeshInstance3D.new()
+	var blob_quad := QuadMesh.new()
+	blob_quad.size = Vector2(sphere_r * 2.8, sphere_r * 2.8)
+	blob.mesh = blob_quad
+	var blob_copy := blob_mat.duplicate() as ShaderMaterial
+	blob.material_override = blob_copy
+	blob.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(blob)
+	agent_blobs[sid] = {"node": blob, "mat": blob_copy}
+
 	var indicator := Node3D.new()
 	indicator.position = Vector3(0, sphere_r * 1.9, 0)
 	indicator.visible = false
@@ -1131,6 +1349,8 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 
 	root.add_child(indicator)
 	agent_carry_indicators[sid] = {"root": indicator, "mat": ind_mat, "base_y": sphere_r * 1.9}
+	agent_states[sid] = {"facing": Vector3.FORWARD, "squash": 0.0, "prev_vy": 0.0,
+		"trail": 0.0, "phase": 0.0}
 	return root
 
 

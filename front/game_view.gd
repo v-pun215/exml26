@@ -129,7 +129,7 @@ func _ready() -> void:
 		sun.name = "DirectionalLight3D"
 		add_child(sun)
 	sun.rotation = Vector3(-0.9, -0.6, 0.0)
-	sun.light_energy = 0.55
+	sun.light_energy = 0.8
 	sun.light_color = Color(1.0, 0.96, 0.86)
 	sun.light_angular_distance = 0.7
 	sun.shadow_enabled = true
@@ -146,6 +146,19 @@ func _ready() -> void:
 	fill.light_color = Color(0.72, 0.85, 1.0)
 	fill.shadow_enabled = false
 	add_child(fill)
+
+	toon_shader = load("res://toon.gdshader")
+	outline_shader = load("res://outline.gdshader")
+	outline_mat = ShaderMaterial.new()
+	outline_mat.shader = outline_shader
+	obstacle_mat = _toon_material(Color(0.86, 0.48, 0.38), 0.06)
+
+	ground_mat = ShaderMaterial.new()
+	ground_mat.shader = load("res://ground_facets.gdshader")
+
+	ramp_top_mat = _toon_material(Color(0.99, 0.66, 0.82), 0.05, Color(0, 0, 0), 0.0, false, false)
+	ramp_side_mat = _toon_material(Color(0.88, 0.46, 0.66), 0.04, Color(0, 0, 0), 0.0, false, false)
+	pole_mat = _toon_material(Color(0.80, 0.80, 0.86), 0.06)
 
 	_spawn_clouds()
 	_spawn_aurora_curtains()
@@ -185,20 +198,6 @@ func _ready() -> void:
 	minimap.draw.connect(_draw_minimap)
 	layer.add_child(minimap)
 
-
-	toon_shader = load("res://toon.gdshader")
-	outline_shader = load("res://outline.gdshader")
-	outline_mat = ShaderMaterial.new()
-	outline_mat.shader = outline_shader
-	obstacle_mat = _toon_material(Color(0.86, 0.48, 0.38), 0.06)
-
-	ground_mat = ShaderMaterial.new()
-	ground_mat.shader = load("res://ground_facets.gdshader")
-
-	ramp_top_mat = _toon_material(Color(0.98, 0.82, 0.42), 0.05)
-	ramp_side_mat = _toon_material(Color(0.86, 0.62, 0.34), 0.04)
-	pole_mat = _toon_material(Color(0.80, 0.80, 0.86), 0.06)
-
 	_setup_audio()
 	tcp.connect_to_host(host, port)
 
@@ -223,7 +222,7 @@ func _draw_minimap() -> void:
 		var pts := PackedVector2Array()
 		for p in quad:
 			pts.append(origin + p * scale)
-		minimap.draw_colored_polygon(pts, Color(0.98, 0.82, 0.42, 0.95))
+		minimap.draw_colored_polygon(pts, Color(0.99, 0.62, 0.80, 0.95))
 
 	for poly in mini_obstacles:
 		var pts := PackedVector2Array()
@@ -258,7 +257,8 @@ func _draw_minimap() -> void:
 
 
 func _toon_material(color: Color, rim := 0.08,
-		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false) -> ShaderMaterial:
+		emission := Color(0, 0, 0), emission_strength := 0.0, vertex_color := false,
+		outlined := true) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = toon_shader
 	mat.set_shader_parameter("base_color", color)
@@ -266,6 +266,8 @@ func _toon_material(color: Color, rim := 0.08,
 	mat.set_shader_parameter("emission_color", emission)
 	mat.set_shader_parameter("emission_strength", emission_strength)
 	mat.set_shader_parameter("use_vertex_color", vertex_color)
+	if outlined:
+		mat.next_pass = outline_mat
 	return mat
 
 
@@ -279,8 +281,8 @@ func _spawn_clouds() -> void:
 	add_child(cloud_root)
 	for i in range(20):
 		var ang := rng.randf() * TAU
-		var dist := rng.randf_range(200.0, 620.0)
-		var base_y := rng.randf_range(130.0, 270.0)
+		var dist := rng.randf_range(260.0, 700.0)
+		var base_y := rng.randf_range(80.0, 200.0)
 		var cluster := Node3D.new()
 		cluster.position = Vector3(cos(ang) * dist, base_y, sin(ang) * dist)
 		cloud_root.add_child(cluster)
@@ -397,7 +399,7 @@ func _spawn_background() -> void:
 			else:
 				_add_bg_facet(st, p00, p10, p01, base)
 				_add_bg_facet(st, p10, p11, p01, base)
-	var terrain_mat := _toon_material(Color.WHITE, 0.03, Color(0.08, 0.13, 0.08), 0.05, true)
+	var terrain_mat := _toon_material(Color.WHITE, 0.03, Color(0.08, 0.13, 0.08), 0.05, true, false)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = terrain_mat
@@ -525,8 +527,8 @@ func _update_camera() -> void:
 func _place_follow_cam() -> void:
 	var fwd := Vector3(sin(follow_yaw), 0, cos(follow_yaw))
 	var zf := _follow_zoom()
-	camera.position = follow_pos - fwd * (9.0 * zf) + Vector3(0, 6.0 * zf, 0)
-	camera.look_at(follow_pos + fwd * (4.0 * zf))
+	camera.position = follow_pos - fwd * (9.0 * zf) + Vector3(0, 5.0 * zf, 0)
+	camera.look_at(follow_pos + fwd * (4.0 * zf) + Vector3(0, 2.2 * zf, 0))
 
 
 func _agent_tag(sid: int) -> String:
@@ -959,8 +961,8 @@ func _facet_color(cx: float, cz: float) -> Color:
 	var t := _hash01(cx * 0.07 + 31.0, cz * 0.07 + 31.0)
 	var warm := Color(0.58, 0.82, 0.30)
 	var cool := Color(0.40, 0.72, 0.40)
-	var col := cool.lerp(warm, t * 0.7 + 0.15)
-	var shade := 0.94 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.1
+	var col := cool.lerp(warm, t * 0.45 + 0.28)
+	var shade := 0.96 + _hash01(cx * 0.33 + 7.0, cz * 0.33 + 7.0) * 0.08
 	return Color(col.r * shade, col.g * shade, col.b * shade)
 
 
@@ -1143,16 +1145,6 @@ func _make_agent(sid: int, team: String, _player: int) -> Node3D:
 	sm.radial_segments = 24
 	sm.rings = 16
 	mi.mesh = sm
-	var outline := MeshInstance3D.new()
-	var osm := SphereMesh.new()
-	osm.radius = sphere_r * 1.07
-	osm.height = sphere_r * 2.14
-	osm.radial_segments = 24
-	osm.rings = 16
-	outline.mesh = osm
-	outline.material_override = outline_mat
-	outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.add_child(outline)
 	var mat := _toon_material(team_colors.get(team, Color(1, 1, 1)), 0.10)
 	mi.material_override = mat
 	agent_mats[sid] = mat

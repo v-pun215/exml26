@@ -1,6 +1,6 @@
 # exml26
 
-This is the platform behind Exun's annual machine learning contest - ExML. Teams write a Python model, the engine runs a 20 Hz capture-the-flag match between rolling spheres, and a Godot client lets you watch it live or replay it afterwards.
+This is the platform used for the 2026 edition of Exun's annual machine learning contest - ExML. Teams write a Python model, the engine runs a 20 Hz capture-the-flag match between rolling spheres, and a Godot client lets you watch it live or replay it afterwards.
 
 The repo is the platform itself: the engine, model runner, telemetry, bridge, and viewer. Team entries are just model files and live seperately.
 
